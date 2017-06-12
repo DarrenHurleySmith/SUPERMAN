@@ -117,11 +117,11 @@ void usage(int status, char* progname)
 	 "-c, --ca_cert [file]       Location of the CA public certificate\n"
 	 "-n, --node_cert [file]     Location of this nodes public certificate\n"
 	 "-p, --dh_privkey [file]    Location of the DH private key file\n"
-	 "-l, --logfile	[file]       Location of the log file\n"
+	 "-l, --logfile [file]       Location of the log file\n"
 	 "-f, --disc_freq [freq ms]  The frequency with which to send discovery packets\n"
 	 "-t, --test_cert            Location of a certificate to check against\n"
 	 "-D, --Debug                Debug mode\n"
-	 "-i, --if iface             The interface to set the status of\n"
+	 "-i, --if [iface]           The interface to set the status of\n"
 	 "-s, --if_state [up|down]   The state of the interface\n"
 	 "-V, --version              Show version\n"
 	 "-?, --help                 Show help\n\n"
@@ -271,7 +271,7 @@ bool ProcessArgs(int argc, char **argv)
 	}
 
 	if(mode == mode_test_cert) {
-		if(strcmp(test_cert_filename, "")) {
+		if(strcmp(test_cert_filename, "") == 0) {
 			printf("You must specify -t  with -m test_cert.\n");
 			usage(0, progname);
 			exit(0);

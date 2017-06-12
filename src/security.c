@@ -1181,27 +1181,23 @@ bool LoadFile(unsigned char* filename, uint32_t* data_len, unsigned char** data)
 {
 	// lprintf("Security: Loading %s...\n", filename);
 	int fd;
-	struct stat file_info;
-
-	if (access(filename, F_OK) != 0)
-	{
-		if (errno == ENOENT)
-			lprintf("Security: \tFile does not exist: %s\n", filename);
-		else if (errno == EACCES)
-			lprintf("Security: \tFile is not accessible: %s\n", filename);
-		return NULL;
-	}
-	if (access(filename, R_OK) != 0)
-	{
-		lprintf("Security: \tFile is not readable (access denied): %s\n", filename);
-		return NULL;
-	}
-
 	fd = open(filename, O_RDONLY);
-	fstat(fd, &file_info);
-	*data_len = file_info.st_size;
+
+	if(fd == -1)
+	{
+		lprintf("Security: \t%s: %s\n", strerror(errno), filename);
+		return NULL;
+	}
+
+	// Get the size and reset the position to the start.
+	*data_len = lseek(fd, 0, SEEK_END);
+	lseek(fd, 0, SEEK_SET);
+	
+	// Allocate some memory to hold the data.
 	*data = (unsigned char*) malloc(*data_len);
 	int bytes_read;
+
+	// Read it all.
 	bytes_read = read(fd, *data, *data_len);
 	if(bytes_read != *data_len)
 		lprintf("Security: \tBytes read isn't file length: %s\n", filename);
@@ -1540,6 +1536,8 @@ bool TestCertificate(unsigned char* cert_filename)
 		{
 			unsigned char* sharedSecret = GenerateSharedSecret(cert_data_len, cert_data);
 
+			lprintf("Certificate test successful.\n");
+
 			OPENSSL_free(sharedSecret);
 		}
 
@@ -1661,7 +1659,10 @@ bool InitSecurity(unsigned char* ca_cert_filename, unsigned char* node_cert_file
 		if(MallocAndGenerateSharedkeys(bk_len, bk, &ske_len, &ske, &skp_len, &skp))
 		{
 			// lprintf("Security: \tUpdating the new broadcast key (again, just in case)...\n");
-			UpdateSupermanBroadcastKey(bk_len, bk, ske_len, ske, skp_len, skp, false);
+			if(IsNetLinkLoaded())
+			{
+				UpdateSupermanBroadcastKey(bk_len, bk, ske_len, ske, skp_len, skp, false);
+			}
 			free(ske);
 			ske = NULL;
 			free(skp);

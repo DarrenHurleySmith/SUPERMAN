@@ -32,6 +32,7 @@ void ReceivedSupermanBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned c
 
 #endif
 
+bool IsNetLinkLoaded(void);
 bool InitNetlink(void);
 void DeInitNetlink(void);
 

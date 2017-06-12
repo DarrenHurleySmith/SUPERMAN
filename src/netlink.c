@@ -21,6 +21,8 @@ int superman_family_id = -1;										\
 
 #endif
 
+bool netlink_loaded = false;
+
 #define K_SUPERMAN_FAMILY_NAME		"SUPERMAN"		// Maximum 16 characters (inc. NULL terminator)
 #define K_SUPERMAN_MC_GROUP_NAME	"SUPERMAN_GROUP"	// Maximum 16 characters (inc. NULL terminator)
 
@@ -540,7 +542,8 @@ static const struct genl_multicast_group superman_mc_groups[] = {
 	SIZE = nla_len(attrs[ATTR]);				\
 	if(SIZE > 0)					\
 	{						\
-		VAR = kmalloc(SIZE, GFP_ATOMIC);	\
+		VAR = kmalloc(SIZE + 1, GFP_ATOMIC);	\
+		VAR[SIZE] = '\0';						\
 		nla_memcpy(VAR, attrs[ATTR], SIZE);	\
 	}						\
 	else						\
@@ -1326,6 +1329,11 @@ void ReceivedSupermanBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned c
 
 #endif
 
+bool IsNetLinkLoaded(void)
+{
+	return netlink_loaded;
+}
+
 bool InitNetlink(void)
 {
 #ifdef __KERNEL__
@@ -1409,6 +1417,8 @@ bool InitNetlink(void)
 	}
 
 #endif
+
+	netlink_loaded = true;
 	return true;
 }
 
@@ -1432,4 +1442,6 @@ void DeInitNetlink(void)
 		nlsk = NULL;
 	}
 #endif
+
+	netlink_loaded = false;
 }
