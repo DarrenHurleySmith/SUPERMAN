@@ -336,11 +336,11 @@ unsigned int process_authenticated_sk_request(struct superman_packet_info* spi)
 
 	// If we don't have it, we can request it too.
 	if(!GetSecurityTableEntry(targetaddr, &security_details))
-		SendAuthenticatedSKRequestPacket(originaddr, targetaddr);
+		SendAuthenticatedSKRequestPacket(spi->net, originaddr, targetaddr);
 
 	// Otherwise, we can share the answer we already have.
 	else
-		SendAuthenticatedSKResponsePacket(originaddr, targetaddr, security_details->sk_len, security_details->sk);
+		SendAuthenticatedSKResponsePacket(spi->net, originaddr, targetaddr, security_details->sk_len, security_details->sk);
 
 	spi->result = NF_DROP;				// Don't let an Authenticated SK Request propogate higher up the stack
 	return FreeSupermanPacketInfo(spi);
@@ -373,7 +373,7 @@ unsigned int process_authenticated_sk_response(struct superman_packet_info* spi)
 	if(spi->p2p_our_addr != originaddr)
 	{
 		//printk(KERN_INFO "SUPERMAN: Netfilter - process_authenticated_sk_response (our_addr: %u.%u.%u.%u, originaddr: %u.%u.%u.%u).\n", 0x0ff & spi->p2p_our_addr, 0x0ff & (spi->p2p_our_addr >> 8), 0x0ff & (spi->p2p_our_addr >> 16), 0x0ff & (spi->p2p_our_addr >> 24), 0x0ff & originaddr, 0x0ff & (originaddr >> 8), 0x0ff & (originaddr >> 16), 0x0ff & (originaddr >> 24));
-		SendAuthenticatedSKResponsePacket(originaddr, targetaddr, sk_len, sk);
+		SendAuthenticatedSKResponsePacket(spi->net, originaddr, targetaddr, sk_len, sk);
 	}
 
 	spi->result = NF_DROP;				// Don't let an Authenticated SK Response propogate higher up the stack
@@ -559,7 +559,7 @@ unsigned int hook_prerouting(void* priv, struct sk_buff *skb, const struct nf_ho
 	// printk(KERN_INFO "SUPERMAN: Netfilter (PREROUTING)\n");
 
 	// Let non-IP packets and those of interfaces we're not monitoring.
-	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->in->ifindex))
+	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->net, state->in->ifindex))
 	{
 		// if(!is_valid_ip_packet(skb))
 		// 	printk(KERN_INFO "SUPERMAN: Netfilter (PREROUTING) - \tNot a valid IP packet.\n");
@@ -641,7 +641,7 @@ unsigned int hook_prerouting(void* priv, struct sk_buff *skb, const struct nf_ho
 				{
 					//printk(KERN_INFO "SUPERMAN: Netfilter (PREROUTING) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->p2p_neighbour_addr);
-					SendAuthenticatedSKRequestPacket(0, spi->p2p_neighbour_addr);
+					SendAuthenticatedSKRequestPacket(state->net, 0, spi->p2p_neighbour_addr);
 				}
 
 				return spi->result;
@@ -666,7 +666,7 @@ unsigned int hook_localin(void* priv, struct sk_buff *skb, const struct nf_hook_
 	// printk(KERN_INFO "SUPERMAN: Netfilter (LOCALIN)\n");
 
 	// Let non-IP packets and those of interfaces we're not monitoring.
-	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->in->ifindex))
+	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->net, state->in->ifindex))
 		return NF_ACCEPT;
 
 	// Construct a new SPI to handle this packet.
@@ -712,7 +712,7 @@ unsigned int hook_localin(void* priv, struct sk_buff *skb, const struct nf_hook_
 				{
 					//printk(KERN_INFO "SUPERMAN: Netfilter (LOCALIN) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->e2e_addr);
-					SendAuthenticatedSKRequestPacket(0, spi->e2e_addr);
+					SendAuthenticatedSKRequestPacket(spi->net, 0, spi->e2e_addr);
 				}
 
 				return spi->result;
@@ -737,7 +737,7 @@ unsigned int hook_forward(void* priv, struct sk_buff *skb, const struct nf_hook_
 	struct superman_packet_info* spi;
 
 	// Let non-IP packets and those of interfaces we're not monitoring.
-	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->out->ifindex))
+	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->net, state->out->ifindex))
 		return NF_ACCEPT;
 
 	// Construct a new SPI to handle this packet.
@@ -761,7 +761,7 @@ unsigned int hook_localout(void* priv, struct sk_buff *skb, const struct nf_hook
 	//printk(KERN_INFO "SUPERMAN: Netfilter (LOCALOUT)\n");
 
 	// Let non-IP packets and those of interfaces we're not monitoring.
-	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->out->ifindex))
+	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->net, state->out->ifindex))
 		return NF_ACCEPT;
 
 	// Construct a new SPI to handle this packet.
@@ -811,7 +811,7 @@ unsigned int hook_localout(void* priv, struct sk_buff *skb, const struct nf_hook
 				{
 					//printk(KERN_ERR "SUPERMAN: Netfilter (LOCALOUT) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->e2e_addr);
-					SendAuthenticatedSKRequestPacket(0, spi->e2e_addr);
+					SendAuthenticatedSKRequestPacket(spi->net, 0, spi->e2e_addr);
 				}
 
 				return spi->result;
@@ -834,7 +834,7 @@ unsigned int hook_postrouting(void* priv, struct sk_buff *skb, const struct nf_h
 	// printk(KERN_INFO "SUPERMAN: Netfilter (POSTROUTING)\n");
 
 	// Let non-IP packets and those of interfaces we're not monitoring.
-	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->out->ifindex))
+	if(!is_valid_ip_packet(skb) || !HasInterfacesTableEntry(state->net, state->out->ifindex))
 		return NF_ACCEPT;
 
 	// Construct a new SPI to handle this packet.
@@ -912,7 +912,7 @@ unsigned int hook_postrouting(void* priv, struct sk_buff *skb, const struct nf_h
 				{
 					//printk(KERN_INFO "SUPERMAN: Netfilter (POSTROUTING) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->p2p_neighbour_addr);
-					SendAuthenticatedSKRequestPacket(0, spi->p2p_neighbour_addr);
+					SendAuthenticatedSKRequestPacket(spi->net, 0, spi->p2p_neighbour_addr);
 				}
 
 				return spi->result;
@@ -928,31 +928,58 @@ unsigned int hook_postrouting(void* priv, struct sk_buff *skb, const struct nf_h
 	return FreeSupermanPacketInfo(spi);
 }
 
+static int __net_init NetInitHook(struct net* net)
+{
+	nf_register_net_hook(net, &nf_hook_prerouting);
+	nf_register_net_hook(net, &nf_hook_localin);
+	nf_register_net_hook(net, &nf_hook_localout);
+	nf_register_net_hook(net, &nf_hook_postrouting);
+
+	// NOTE: This is added for debugging purposes only and isn't actually needed.
+	nf_register_net_hook(net, &nf_hook_forward);
+
+	return 0;
+}
+
+static void __net_exit NetDeInitHook(struct net* net)
+{
+	nf_unregister_net_hook(net, &nf_hook_prerouting);
+	nf_unregister_net_hook(net, &nf_hook_localin);
+	nf_unregister_net_hook(net, &nf_hook_localout);
+	nf_unregister_net_hook(net, &nf_hook_postrouting);
+
+	// NOTE: This is added for debugging purposes only and isn't actually needed.
+	nf_unregister_net_hook(net, &nf_hook_forward);
+}
+
+static struct pernet_operations __net_initdata superman_netfilter_net_ops = {
+       .init = &NetInitHook,
+       .exit = &NetDeInitHook,
+};
+
 /*
 The proc entry init and deinit functions deal with construction and destruction.
 */
 bool InitNetFilter(void)
 {
-	nf_register_hook(&nf_hook_prerouting);
-	nf_register_hook(&nf_hook_localin);
-	nf_register_hook(&nf_hook_localout);
-	nf_register_hook(&nf_hook_postrouting);
+	struct net *net;
+	
+	for_each_net(net)
+		NetInitHook(net);		
 
-	// NOTE: This is added for debugging purposes only and isn't actually needed.
-	nf_register_hook(&nf_hook_forward);
+	register_pernet_subsys(&superman_netfilter_net_ops);
 
 	return true;
 }
 
 void DeInitNetFilter(void)
 {
-	nf_unregister_hook(&nf_hook_prerouting);
-	nf_unregister_hook(&nf_hook_localin);
-	nf_unregister_hook(&nf_hook_localout);
-	nf_unregister_hook(&nf_hook_postrouting);
+	struct net *net;
 
-	// NOTE: This is added for debugging purposes only and isn't actually needed.
-	nf_unregister_hook(&nf_hook_forward);
+	unregister_pernet_subsys(&superman_netfilter_net_ops);	
+
+	for_each_net(net)
+		NetDeInitHook(net);		
 }
 
 #endif

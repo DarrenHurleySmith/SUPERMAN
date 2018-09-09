@@ -499,17 +499,17 @@ static struct nla_policy d_received_superman_broadcast_key_exchange_genl_policy[
 #ifdef __KERNEL__
 
 static struct genl_family superman_genl_family = {
-	.id			= 0, 	// GENL_ID_GENERATE = 0
+	.id				= 0, 	// GENL_ID_GENERATE = 0
 	.hdrsize		= 0,
 	.name			= K_SUPERMAN_FAMILY_NAME,
 	.version		= 1,
 	.maxattr		= K_UPDATE_SUPERMAN_SECURITY_TABLE_ENTRY_ATTR_MAX, //SUPERMAN_ATTR_MAX,
 	.netnsok		= false,
-	.parallel_ops		= false,
+	.parallel_ops	= false,
 	.pre_doit		= NULL,
 	.post_doit		= NULL,
 	.mcast_bind		= NULL,
-	.mcast_unbind		= NULL
+	.mcast_unbind	= NULL
 };
 
 enum {
@@ -529,7 +529,7 @@ static const struct genl_multicast_group superman_mc_groups[] = {
 	struct nlattr *attrs[ATTR_MAX + 2];												\
 	/* printk(KERN_INFO "SUPERMAN: Netlink - Received netlink (%s)...\n", superman_msg_type_to_str(info->genlhdr->cmd));	*/	\
 	/* printk(KERN_INFO "SUPERMAN: Netlink - \tParsing netlink message...\n"); */							\
-	if(nlmsg_parse(info->nlhdr, superman_genl_family.hdrsize + GENL_HDRLEN, attrs, ATTR_MAX + 1, POLICY) < 0)			\
+	if(nlmsg_parse(info->nlhdr, superman_genl_family.hdrsize + GENL_HDRLEN, attrs, ATTR_MAX + 1, POLICY, NULL) < 0)			\
 	{																\
 		printk(KERN_INFO "SUPERMAN: Netlink - \tFailed to parse netlink message\n");						\
 		return 0;														\
@@ -1329,7 +1329,11 @@ void ReceivedSupermanBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned c
 bool InitNetlink(void)
 {
 #ifdef __KERNEL__
-	genl_register_family_with_ops_groups(&superman_genl_family, superman_ops, superman_mc_groups);
+	superman_genl_family.ops 		= superman_ops;
+	superman_genl_family.n_ops 		= ARRAY_SIZE(superman_ops);
+	superman_genl_family.mcgrps 	= superman_mc_groups;
+	superman_genl_family.n_mcgrps 	= ARRAY_SIZE(superman_mc_groups);
+	genl_register_family(&superman_genl_family);
 #else
 	int rc = 0;
 

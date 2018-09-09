@@ -139,7 +139,7 @@ bool GetSecurityTableEntry(uint32_t daddr, struct security_table_entry** entry)
 	//printk(KERN_INFO "SUPERMAN: Security_Table - GetSecurityTableEntry - no entry, creating...");
 
 	// If the entry doesn't exist, add it.
-	if(!AddSecurityTableEntry(daddr, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, NULL, 0, NULL, 0, NULL, -1, -1)) {
+	if(!AddSecurityTableEntry(daddr, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, NULL, 0, NULL, 0, NULL, -1, NULL, -1)) {
 		return false;
 	}
 	else {
@@ -159,7 +159,7 @@ bool GetSecurityTableEntry(uint32_t daddr, struct security_table_entry** entry)
 	return false;
 }
 
-bool UpdateSecurityTableEntry(struct security_table_entry *e, uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, int32_t ifindex)
+bool UpdateSecurityTableEntry(struct security_table_entry *e, uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, struct net* net, int32_t ifindex)
 {
 	// printk(KERN_INFO "Security_Table:\tUpdateSecurityTableEntry - clearing security table entry.\n");
 	ClearSecurityTableEntry(e);
@@ -170,6 +170,8 @@ bool UpdateSecurityTableEntry(struct security_table_entry *e, uint32_t daddr, ui
 	e->flag = flag;
 	if(timestamp != -1)
 		e->timestamp = timestamp;
+	if(net != NULL)
+		e->net = net;
 	if(ifindex != -1)
 		e->ifindex = ifindex;
 
@@ -216,7 +218,7 @@ void ClearSecurityTableEntry(struct security_table_entry *e)
 	}
 }
 
-bool UpdateSecurityTableEntryFlag(uint32_t daddr, uint8_t flag, uint32_t timestamp, uint32_t ifindex)
+bool UpdateSecurityTableEntryFlag(uint32_t daddr, uint8_t flag, uint32_t timestamp, struct net *net, uint32_t ifindex)
 {
 	struct security_table_entry *e;
 
@@ -227,11 +229,11 @@ bool UpdateSecurityTableEntryFlag(uint32_t daddr, uint8_t flag, uint32_t timesta
 	}
 	else
 	{
-		return UpdateOrAddSecurityTableEntry(daddr, flag, 0, NULL, 0, NULL, 0, NULL, timestamp, ifindex);
+		return UpdateOrAddSecurityTableEntry(daddr, flag, 0, NULL, 0, NULL, 0, NULL, timestamp, net, ifindex);
 	}
 }
 
-bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, int32_t ifindex)
+bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, struct net *net, int32_t ifindex)
 {
 	struct security_table_entry *e;
 	bool r = false;
@@ -252,9 +254,10 @@ bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsign
 	e->skp_len = 0;
 	e->skp = NULL;
 	e->timestamp = 0;
+	e->net = NULL;
 	e->ifindex = 0;
 
-	if(!UpdateSecurityTableEntry(e, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, ifindex))
+	if(!UpdateSecurityTableEntry(e, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, net, ifindex))
 	{
 		RemoveSecurityTableEntry(daddr);
 		printk(KERN_ERR "SUPERMAN: security_table - \t\t\t\"Out Of Memory\" in UpdateOrAddSecurityTableEntry\n");
@@ -278,7 +281,7 @@ bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsign
 	return r;
 }
 
-bool UpdateOrAddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, int32_t ifindex)
+bool UpdateOrAddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, struct net *net, int32_t ifindex)
 {
 	struct security_table_entry *e;
 
@@ -289,7 +292,7 @@ bool UpdateOrAddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len
 		// printk(KERN_INFO "Security_Table:\tUpdateOrAddSecurityTableEntry - updating existing entry.\n");
 
 		// printk(KERN_ERR "SUPERMAN: security_table - \t\tUpdating an existing entry...\n");
-		if(!UpdateSecurityTableEntry(e, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, ifindex))
+		if(!UpdateSecurityTableEntry(e, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, net, ifindex))
 		{
 			RemoveSecurityTableEntry(daddr);
 			printk(KERN_ERR "SUPERMAN: security_table - \t\t\t\"Out Of Memory\" in UpdateOrAddSecurityTableEntry\n");
@@ -303,7 +306,7 @@ bool UpdateOrAddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len
 	}
 	else
 	{
-		return AddSecurityTableEntry(daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, ifindex);
+		return AddSecurityTableEntry(daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, net, ifindex);
 	}
 }
 

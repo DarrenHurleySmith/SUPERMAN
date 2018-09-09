@@ -121,8 +121,8 @@ void SendDiscoveryRequestPacket(uint32_t sk_len, unsigned char* sk);
 void SendCertificateRequestPacket(uint32_t addr, uint32_t sk_len, unsigned char* sk);
 void SendCertificateExchangePacket(uint32_t addr, uint32_t certificate_len, unsigned char* certificate);
 void SendCertificateExchangeWithBroadcastKeyPacket(uint32_t addr, uint32_t certificate_len, unsigned char* certificate, uint32_t broadcast_key_len, unsigned char* broadcast_key);
-void SendAuthenticatedSKRequestPacket(uint32_t originaddr, uint32_t targetaddr);
-void SendAuthenticatedSKResponsePacket(uint32_t originaddr, uint32_t targetaddr, uint32_t sk_len, unsigned char* sk);
+void SendAuthenticatedSKRequestPacket(struct net *net, uint32_t originaddr, uint32_t targetaddr);
+void SendAuthenticatedSKResponsePacket(struct net *net, uint32_t originaddr, uint32_t targetaddr, uint32_t sk_len, unsigned char* sk);
 
 void SendBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadcast_key);
 void SendSKInvalidatePacket(uint32_t addr);

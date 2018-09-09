@@ -55,14 +55,14 @@ static inline bool __interfaces_table_add(struct interfaces_table_entry *e)
 	return true;
 }
 
-static inline struct interfaces_table_entry *__interfaces_table_find(uint32_t ifindex)
+static inline struct interfaces_table_entry *__interfaces_table_find(struct net *net, uint32_t ifindex)
 {
 	struct list_head *pos;
 
 	list_for_each(pos, &interfaces_table_head) {
 		struct interfaces_table_entry *e = (struct interfaces_table_entry *)pos;
 
-		if (e->ifindex == ifindex)
+		if (e->net == net && e->ifindex == ifindex)
 			return e;
 	}
 	return NULL;
@@ -80,13 +80,13 @@ static inline bool __interfaces_table_del(struct interfaces_table_entry *e)
 	return true;
 }
 
-bool RemoveInterfacesTableEntry(uint32_t ifindex)
+bool RemoveInterfacesTableEntry(struct net *net, uint32_t ifindex)
 {
 	struct interfaces_table_entry *e;
 
 	write_lock_bh(&interfaces_table_lock);
 
-	if ((e = __interfaces_table_find(ifindex)) && __interfaces_table_del(e))
+	if ((e = __interfaces_table_find(net, ifindex)) && __interfaces_table_del(e))
 	{
 		kfree(e);
 		write_unlock_bh(&interfaces_table_lock);
@@ -99,33 +99,34 @@ bool RemoveInterfacesTableEntry(uint32_t ifindex)
 
 bool RemoveInterfacesTableEntryByName(char* ifname)
 {
+	struct net *net = get_net_ns_by_pid(task_pid_nr(current));
 	struct net_device* dev;
 	uint32_t ifindex;
 
 	// Find the index
-	dev = dev_get_by_name(&init_net, ifname);
+	dev = dev_get_by_name(net, ifname);
 	if(dev == NULL) return false;
 	ifindex = dev->ifindex;
 	dev_put(dev);
 
-	return RemoveInterfacesTableEntry(ifindex);
+	return RemoveInterfacesTableEntry(net, ifindex);
 }
 
-bool HasInterfacesTableEntry(uint32_t ifindex)
+bool HasInterfacesTableEntry(struct net *net, uint32_t ifindex)
 {
 	struct interfaces_table_entry* entry;
 	read_lock_bh(&interfaces_table_lock);
-	entry = __interfaces_table_find(ifindex);
+	entry = __interfaces_table_find(net, ifindex);
 	read_unlock_bh(&interfaces_table_lock);
 	return entry != NULL;
 }
 
-bool AddInterfacesTableEntry(uint32_t ifindex)
+bool AddInterfacesTableEntry(struct net *net, uint32_t ifindex)
 {
 	struct interfaces_table_entry *e;
 	bool r = false;
 
-	if(HasInterfacesTableEntry(ifindex))
+	if(HasInterfacesTableEntry(net, ifindex))
 	{
 		return true;
 	}
@@ -138,6 +139,7 @@ bool AddInterfacesTableEntry(uint32_t ifindex)
 			return false;
 		}
 		memset(e, 0, sizeof(struct interfaces_table_entry));
+		e->net = net;
 		e->ifindex = ifindex;
 
 		write_lock_bh(&interfaces_table_lock);
@@ -155,20 +157,22 @@ bool AddInterfacesTableEntry(uint32_t ifindex)
 
 bool AddInterfacesTableEntryByName(char* ifname)
 {
+	struct net *net = get_net_ns_by_pid(task_pid_nr(current));
 	struct net_device* dev;
 	uint32_t ifindex;
 
 	// Find the index
-	dev = dev_get_by_name(&init_net, ifname);
+	dev = dev_get_by_name(net, ifname);
 	if(dev == NULL) return false;
 	ifindex = dev->ifindex;
 	dev_put(dev);
 
-	return AddInterfacesTableEntry(ifindex);
+	return AddInterfacesTableEntry(net, ifindex);
 }
 
 int interfaces_table_info_proc_show(struct seq_file *m, void *v)
 {
+	struct net *net = get_net_ns_by_pid(task_pid_nr(current));
 	struct net_device *dev;
 
 	read_lock_bh(&interfaces_table_lock);
@@ -176,8 +180,8 @@ int interfaces_table_info_proc_show(struct seq_file *m, void *v)
 
 	seq_printf(m, "%-6s %-20s %-16s %-16s %-10s\n", "Index", "Name", "Address", "Broadcast", "Secured");
 
-	for_each_netdev(&init_net, dev) {
-		bool hasEntry = (__interfaces_table_find(dev->ifindex) != NULL);
+	for_each_netdev(net, dev) {
+		bool hasEntry = (__interfaces_table_find(net, dev->ifindex) != NULL);
 		char addr[16] = "";
 		char baddr[16] = "";
 		struct in_device *indev;
@@ -220,14 +224,46 @@ void FlushInterfacesTable(void)
 	write_unlock_bh(&interfaces_table_lock);
 }
 
+static int __net_init NetInitHook(struct net* net)
+{
+	return 0;
+}
+
+static void __net_exit NetDeInitHook(struct net* net)
+{
+	// Remove all interfaces related to the deinitialising network namespace.
+	struct list_head *pos, *tmp;
+
+	write_lock_bh(&interfaces_table_lock);
+
+	list_for_each_safe(pos, tmp, &interfaces_table_head) {
+		struct interfaces_table_entry *e = (struct interfaces_table_entry *)pos;
+		if(e->net == net)
+		{
+			list_del(&e->l);
+			interfaces_table_len--;
+		}
+		kfree(e);
+	}
+
+	write_unlock_bh(&interfaces_table_lock);
+}
+
+static struct pernet_operations __net_initdata superman_interfaces_net_ops = {
+       .init = &NetInitHook,
+       .exit = &NetDeInitHook,
+};
+
 bool InitInterfacesTable(void)
 {
 	interfaces_table_len = 0;
+	register_pernet_subsys(&superman_interfaces_net_ops);
 	return true;
 }
 
 void DeInitInterfacesTable(void)
 {
+	unregister_pernet_subsys(&superman_interfaces_net_ops);
 	FlushInterfacesTable();
 }
 

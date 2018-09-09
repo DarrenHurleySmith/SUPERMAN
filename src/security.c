@@ -111,7 +111,7 @@ bool UpdateBroadcastKey(uint32_t sk_len, unsigned char* sk, uint32_t ske_len, un
 	}
 
 	// printk(KERN_INFO "Security:\tUpdateBroadcastKey - requesting to update the security table entry.\n");
-	return UpdateOrAddSecurityTableEntry(INADDR_BROADCAST, flag, sk_len, sk, ske_len, ske, skp_len, skp, 0, 0);
+	return UpdateOrAddSecurityTableEntry(INADDR_BROADCAST, flag, sk_len, sk, ske_len, ske, skp_len, skp, 0, NULL, 0);
 }
 
 bool GetBroadcastKey(uint32_t* sk_len, unsigned char** sk)
@@ -1255,10 +1255,12 @@ bool FreeCertificate(BIO** certbio, X509** cert)
 
 bool CheckKey(EVP_PKEY* pkey)
 {
-	if(pkey->type != EVP_PKEY_DH)
+	int keytype;
+	keytype = EVP_PKEY_id(pkey);
+	if(keytype != EVP_PKEY_DH)
 	{
 		BIO_printf(outbio, "Security: We were expecting a Diffie Hellman key, that's not what we have.\n");
-		switch (pkey->type)
+		switch (keytype)
 		{
 			case EVP_PKEY_RSA:
 				BIO_printf(outbio, "Security: \t%d bit RSA Key\n", EVP_PKEY_bits(pkey));
@@ -1310,7 +1312,9 @@ BIGNUM* GetNodeShare(uint32_t cert_data_len, unsigned char* cert_data)
 	}
 
 	DH *dh = EVP_PKEY_get1_DH(pkey);
-	BIGNUM* n = BN_dup(dh->pub_key);
+	const BIGNUM* pubkey;
+	DH_get0_key(dh, &pubkey, NULL);
+	BIGNUM* n = BN_dup(pubkey);
 	EVP_PKEY_free(pkey);
 	FreeCertificate(&certbio, &cert);
 	return n;
@@ -1373,7 +1377,9 @@ bool VerifyCertificate(uint32_t cert_data_len, unsigned char* cert_data, unsigne
 		{
 			BIGNUM* shareProvided = BN_mpi2bn(node_share, node_share_len, NULL);
 			BIGNUM* shareDerived = GetNodeShare(cert_data_len, cert_data);
-			ret = (BN_cmp(node_privatekey_dh->pub_key, node_publickey));
+			const BIGNUM* pubkey;
+			DH_get0_key(node_privatekey_dh, &pubkey, NULL);
+			ret = (BN_cmp(pubkey, node_publickey));
 			BN_free(shareProvided);
 			BN_free(shareDerived);
 
@@ -1635,7 +1641,9 @@ bool InitSecurity(unsigned char* ca_cert_filename, unsigned char* node_cert_file
 	}
 
 	// lprintf("Security: Comparing the node private key with the node certificate...\n");
-	if(BN_cmp(node_privatekey_dh->pub_key, node_publickey) != 0)
+	const BIGNUM* pubkey;
+	DH_get0_key(node_privatekey_dh, &pubkey, NULL);
+	if(BN_cmp(pubkey, node_publickey) != 0)
 	{
 		BIO_printf(outbio, "Security: The nodes private key doesn't match the node certificate provided.\n");
 		DeInitSecurity();

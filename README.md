@@ -71,8 +71,8 @@ You have a number of options for trying out SUPERMAN. You can use the test envir
 
 The following guide has been tested and works with (although may not be limited to) the following:
 
-* Ubuntu x64 16.04 - desktop prefered although tested with server using SSH X tunnelling (ssh -X).
-* Kernel version 4.4.
+* Ubuntu x64 18.04 - desktop prefered although tested with server using SSH X tunnelling (ssh -X).
+* Kernel version 4.15.
 * Running as a regular user who has sudo permissions.
 
 Clone the repository and change into the repos directory:
