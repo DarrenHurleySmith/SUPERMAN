@@ -34,6 +34,7 @@ struct superman_packet_info
 	int (*okfn)(struct net *, struct sock *, struct sk_buff *);
 	struct sock *sk;
 	struct net *net;
+	struct net_device *dev;
 	
 	// Useful pointers to the relevant parts of the packet.
 	struct superman_header* shdr;

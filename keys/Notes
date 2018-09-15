@@ -1,20 +1,12 @@
 #
 # OpenSSL
 #
-# We using 1.0.2a (or later) of OpenSSL. This version supports -force_pubkey for using the DH public key within
+# We using 1.1.0 (or later) of OpenSSL. This version supports -force_pubkey for using the DH public key within
 # the certificate, required for verifying the DH public key.
 #
 
 # Check current OpenSSL version
 openssl version
-
-# If older than 1.0.2, grab the latest, build it and install it.
-wget https://www.openssl.org/source/openssl-1.0.2d.tar.gz
-tar -xvzf openssl-1.0.2d.tar.gz
-cd openssl-1.0.2d
-./config --prefix=/usr/
-make
-sudo make install
 
 
 # ----------------------------------------------------------------------------------------------------------

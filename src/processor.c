@@ -10,19 +10,69 @@
 #include "security.h"
 #include "queue.h"
 
-void UpdateSupermanInterfaceTableEntry(uint32_t interface_name_len, unsigned char* interface_name, bool monitor_flag)
+void LoadNodeCertificateAndSecureInterface(uint32_t node_cert_filename_len, unsigned char* node_cert_filename, uint32_t node_dh_privatekey_filename_len, unsigned char* node_dh_privatekey_filename, uint32_t interface_name_len, unsigned char* interface_name)
 {
-	if(monitor_flag)
+	struct net *net = get_net_ns_by_pid(task_pid_nr(current));
+	struct net_device* dev;
+	uint32_t ifindex;
+	dev = dev_get_by_name(net, interface_name);
+	if(dev == NULL) return;
+	ifindex = dev->ifindex;
+	dev_put(dev);
+
+	LoadNodeCertificateThenSecureInterface(GetNSIDFromNet(net), ifindex, node_cert_filename_len, node_cert_filename, node_dh_privatekey_filename_len, node_dh_privatekey_filename);
+}
+
+void SecureInterface(uint32_t netns_id, uint32_t ifindex)
+{
+	struct net *net = GetNetFromNSID(netns_id);
+	if(net != NULL)
+	{
+		printk(KERN_INFO "SUPERMAN: Adding to the interfaces table.\n");
+		AddInterfacesTableEntry(net, ifindex);
+		return;
+	}
+}
+
+void SecureInterfaceByName(uint32_t interface_name_len, unsigned char* interface_name)
+{
+	if(interface_name_len > 0)
 	{
 		printk(KERN_INFO "SUPERMAN: Adding %s to the interfaces table.\n", interface_name);
 		AddInterfacesTableEntryByName(interface_name);
-	}
-	else
-	{
-		printk(KERN_INFO "SUPERMAN: Removing %s from the interfaces table.\n", interface_name);
-		RemoveInterfacesTableEntryByName(interface_name);
+		return;
 	}
 }
+
+void UnsecureInterface(uint32_t netns_id, uint32_t ifindex)
+{
+	struct net *net = GetNetFromNSID(netns_id);
+	if(net != NULL)
+	{
+		printk(KERN_INFO "SUPERMAN: Removing from the interfaces table.\n");
+		RemoveInterfacesTableEntry(net, ifindex);
+	}
+}
+
+void UnsecureInterfaceByName(uint32_t interface_name_len, unsigned char* interface_name)
+{
+	printk(KERN_INFO "SUPERMAN: Removing %s from the interfaces table.\n", interface_name);
+	RemoveInterfacesTableEntryByName(interface_name);
+}
+
+// void UpdateSupermanInterfaceTableEntry(uint32_t interface_name_len, unsigned char* interface_name, bool monitor_flag)
+// {
+// 	if(monitor_flag)
+// 	{
+// 		printk(KERN_INFO "SUPERMAN: Adding %s to the interfaces table.\n", interface_name);
+// 		AddInterfacesTableEntryByName(interface_name);
+// 	}
+// 	else
+// 	{
+// 		printk(KERN_INFO "SUPERMAN: Removing %s from the interfaces table.\n", interface_name);
+// 		RemoveInterfacesTableEntryByName(interface_name);
+// 	}
+// }
 
 void UnloadAll()
 {
@@ -31,54 +81,73 @@ void UnloadAll()
 	FlushSecurityTable();
 }
 
-void UpdateSupermanSecurityTableEntry(uint32_t address, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, int32_t ifindex)
+void UpdateSupermanSecurityTableEntry(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp)
 {
-	UpdateOrAddSecurityTableEntry(address, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, NULL, ifindex);
+	struct net* net = GetNetFromNSID(netns_id);
+	UpdateOrAddSecurityTableEntry(net, ifindex, address, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp);
 
 	// Any packets waiting in the queue to be sent can go now.
 	if(flag == SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED)
-		SetVerdict(SUPERMAN_QUEUE_SEND, address);
+		SetVerdict(SUPERMAN_QUEUE_SEND, net, ifindex, address);
 }
 
-void UpdateSupermanBroadcastKey(uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, bool overwrite)
+void UpdateSupermanBroadcastKey(uint32_t netns_id, uint32_t ifindex, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, bool overwrite)
 {
-	UpdateBroadcastKey(sk_len, sk, ske_len, ske, skp_len, skp, overwrite);
+	struct net* net = GetNetFromNSID(netns_id);
+	UpdateBroadcastKey(net, ifindex, sk_len, sk, ske_len, ske, skp_len, skp, overwrite);
 }
 
-void SendSupermanDiscoveryRequest(uint32_t sk_len, unsigned char* sk)
+void TriggerSupermanDiscoveryRequest(void)
 {
-	SendDiscoveryRequestPacket(sk_len, sk);
+	struct net *net;
+	struct net_device *dev;
+
+	for_each_net(net) {
+		INTERFACE_ITERATOR_START(net, dev)
+		RaiseSupermanDiscoveryRequest(GetNSIDFromNet(net), dev->ifindex);
+		INTERFACE_ITERATOR_END
+	}
 }
 
-void SendSupermanCertificateRequest(uint32_t address, uint32_t sk_len, unsigned char* sk)
+void SendSupermanDiscoveryRequest(uint32_t netns_id, uint32_t ifindex, uint32_t sk_len, unsigned char* sk)
 {
-	SendCertificateRequestPacket(address, sk_len, sk);
+	struct net* net = GetNetFromNSID(netns_id);
+	SendDiscoveryRequestPacket(net, ifindex, sk_len, sk);
 }
 
-void SendSupermanCertificateExchange(uint32_t address, uint32_t certificate_len, unsigned char* certificate)
+void SendSupermanCertificateRequest(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t sk_len, unsigned char* sk)
 {
-	SendCertificateExchangePacket(address, certificate_len, certificate);
+	struct net* net = GetNetFromNSID(netns_id);
+	SendCertificateRequestPacket(net, ifindex, address, sk_len, sk);
 }
 
-void SendSupermanCertificateExchangeWithBroadcastKey(uint32_t address, uint32_t certificate_len, unsigned char* certificate)
+void SendSupermanCertificateExchange(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t certificate_len, unsigned char* certificate)
 {
+	struct net* net = GetNetFromNSID(netns_id);
+	SendCertificateExchangePacket(net, ifindex, address, certificate_len, certificate);
+}
+
+void SendSupermanCertificateExchangeWithBroadcastKey(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t certificate_len, unsigned char* certificate)
+{
+	struct net* net = GetNetFromNSID(netns_id);
 	uint32_t bkey_len;
 	unsigned char* bkey;
 
 	// Get a reference to the actual key, no need for a copy.
-	if(GetBroadcastKey(&bkey_len, &bkey))
+	if(GetBroadcastKey(net, ifindex, &bkey_len, &bkey))
 	{
-		SendCertificateExchangeWithBroadcastKeyPacket(address, certificate_len, certificate, bkey_len, bkey);
+		SendCertificateExchangeWithBroadcastKeyPacket(net, ifindex, address, certificate_len, certificate, bkey_len, bkey);
 	}
 }
 
-void SendSupermanBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadcast_key, bool only_if_changed)
+void SendSupermanBroadcastKeyExchange(uint32_t netns_id, uint32_t ifindex, uint32_t broadcast_key_len, unsigned char* broadcast_key, bool only_if_changed)
 {
+	struct net* net = GetNetFromNSID(netns_id);
 	struct security_table_entry* entry;
 	bool send = true;
 
 	// We can only do this if we already have a broadcast key
-	if(GetSecurityTableEntry(INADDR_BROADCAST, &entry) && entry->flag >= SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED)
+	if(GetSecurityTableEntry(net, ifindex, INADDR_BROADCAST, &entry) && entry->flag >= SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED)
 	{
 		if(only_if_changed)
 		{
@@ -87,20 +156,74 @@ void SendSupermanBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char*
 		}
 
 		if(send)
-			SendBroadcastKeyExchange(broadcast_key_len, broadcast_key);
+			SendBroadcastKeyExchange(net, ifindex, broadcast_key_len, broadcast_key);
 	}
 }
 
-void SendSupermanSKInvalidate(uint32_t address)
+void SendSupermanSKInvalidate(uint32_t netns_id, uint32_t ifindex, uint32_t address)
 {
-	SendSupermanSKInvalidate(address);
+	struct net* net = GetNetFromNSID(netns_id);
+	SendSKInvalidatePacket(net, ifindex, address);
 }
 
 #else
 
 #include "security.h"
 
-void ReceivedSupermanDiscoveryRequest(uint32_t address, uint32_t sk_len, unsigned char* sk, int32_t timestamp, int32_t ifindex)
+void LoadNodeCertificateThenSecureInterface(uint32_t netns_id, uint32_t ifindex, uint32_t node_cert_filename_len, unsigned char* node_cert_filename, uint32_t node_dh_privatekey_filename_len, unsigned char* node_dh_privatekey_filename)
+{
+	// Try and load the certificate. If it loads, we request to secure the interface.
+	if(LoadNodeCertificates(netns_id, ifindex, node_cert_filename, node_dh_privatekey_filename))
+	{
+		// Request to secure the interface
+		SecureInterface(netns_id, ifindex);
+	}
+}
+
+void RaiseSupermanDiscoveryRequest(uint32_t netns_id, uint32_t ifindex)
+{
+	uint32_t sk_len;
+	unsigned char* sk;
+	if(MallocAndCopyPublickey(netns_id, ifindex, &sk_len, &sk))
+	{
+		//lprintf("Main: Calling SendSupermanDiscoveryRequest...\n");
+		SendSupermanDiscoveryRequest(netns_id, ifindex, sk_len, sk);
+
+		free(sk);
+	}
+}
+
+void RaiseNewBroadcastKey(uint32_t netns_id, uint32_t ifindex)
+{
+	// In userspace, we don't know if the kernel has a broadcast key.
+	uint32_t bk_len;
+	unsigned char* bk;
+	// lprintf("Security: \tGenerating a new broadcast key (just in case the kernel doesn't have one yet)...\n");
+	if(MallocAndGenerateNewKey(&bk_len, &bk))
+	{
+		uint32_t ske_len;
+		unsigned char* ske;
+		uint32_t skp_len;
+		unsigned char* skp;
+
+		// lprintf("Security: \tGenerating SKE and SKP for the new broadcast key (again, just in case)...\n");
+		if(MallocAndGenerateSharedkeys(bk_len, bk, &ske_len, &ske, &skp_len, &skp))
+		{
+			// lprintf("Security: \tUpdating the new broadcast key (again, just in case)...\n");
+			UpdateSupermanBroadcastKey(netns_id, ifindex, bk_len, bk, ske_len, ske, skp_len, skp, false);
+			free(ske);
+			ske = NULL;
+			free(skp);
+			skp = NULL;
+		}
+		else
+			lprintf("Security: \tFailed to generate SKE and SKP from the new broadcast key.\n");
+		free(bk);
+		bk = NULL;
+	}
+}
+
+void ReceivedSupermanDiscoveryRequest(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t sk_len, unsigned char* sk, int32_t timestamp)
 {
 	uint32_t ske_len;
 	unsigned char* ske;
@@ -108,18 +231,18 @@ void ReceivedSupermanDiscoveryRequest(uint32_t address, uint32_t sk_len, unsigne
 	unsigned char* skp;
 
 	// lprintf("Processor: \tObtaining SKE and SKP from the SK...\n");
-	if(MallocAndDHAndGenerateSharedkeys(sk_len, sk, &ske_len, &ske, &skp_len, &skp))
+	if(MallocAndDHAndGenerateSharedkeys(netns_id, ifindex, sk_len, sk, &ske_len, &ske, &skp_len, &skp))
 	{
 		// lprintf("Processor: \tRequesting a security table update...\n");
-		UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, ifindex);
+		UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, timestamp);
 
 		uint32_t our_sk_len;
 		unsigned char* our_sk;
 		// lprintf("Processor: \tGrabbing our SK...\n");
-		if(MallocAndCopyPublickey(&our_sk_len, &our_sk))
+		if(MallocAndCopyPublickey(netns_id, ifindex, &our_sk_len, &our_sk))
 		{
 			// lprintf("Processor: \tRequesting to send a certificate request...\n");
-			SendSupermanCertificateRequest(address, our_sk_len, our_sk);
+			SendSupermanCertificateRequest(netns_id, ifindex, address, our_sk_len, our_sk);
 			free(our_sk);
 		}
 		else
@@ -132,7 +255,7 @@ void ReceivedSupermanDiscoveryRequest(uint32_t address, uint32_t sk_len, unsigne
 		lprintf("Processor: \tFailed to generate SKE and SKP from the given SK.\n");
 }
 
-void ReceivedSupermanCertificateRequest(uint32_t address, uint32_t sk_len, unsigned char* sk, int32_t timestamp, int32_t ifindex)
+void ReceivedSupermanCertificateRequest(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t sk_len, unsigned char* sk, int32_t timestamp)
 {
 	uint32_t ske_len;
 	unsigned char* ske;
@@ -140,20 +263,20 @@ void ReceivedSupermanCertificateRequest(uint32_t address, uint32_t sk_len, unsig
 	unsigned char* skp;
 
 	// lprintf("Processor: \tObtaining SKE and SKP from the SK...\n");
-	if(MallocAndDHAndGenerateSharedkeys(sk_len, sk, &ske_len, &ske, &skp_len, &skp))
+	if(MallocAndDHAndGenerateSharedkeys(netns_id, ifindex, sk_len, sk, &ske_len, &ske, &skp_len, &skp))
 	{
 		// lprintf("Processor: \tRequesting a security table update...\n");
-		UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, ifindex);
+		UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, timestamp);
 		free(ske);
 		free(skp);
 
 		uint32_t our_cert_len;
 		unsigned char* our_cert;
 		// lprintf("Processor: \tGrabbing our certificate...\n");
-		if(MallocAndCopyCertificate(&our_cert_len, &our_cert))
+		if(MallocAndCopyCertificate(netns_id, ifindex, &our_cert_len, &our_cert))
 		{
 			// lprintf("Processor: \tRequesting to send a certificate exchange...\n");
-			SendSupermanCertificateExchange(address, our_cert_len, our_cert);
+			SendSupermanCertificateExchange(netns_id, ifindex, address, our_cert_len, our_cert);
 			free(our_cert);
 		}
 		else
@@ -163,20 +286,20 @@ void ReceivedSupermanCertificateRequest(uint32_t address, uint32_t sk_len, unsig
 		lprintf("Processor: \tFailed to generate SKE and SKP from the given SK.\n");
 }
 
-void ReceivedSupermanCertificateExchange(uint32_t address, uint32_t sk_len, unsigned char* sk, uint32_t certificate_len, unsigned char* certificate)
+void ReceivedSupermanCertificateExchange(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t sk_len, unsigned char* sk, uint32_t certificate_len, unsigned char* certificate)
 {
 	// lprintf("Processor: \tVerifying certificate...\n");
-	if(VerifyCertificate(certificate_len, certificate, sk, sk_len))
+	if(VerifyCertificate(netns_id, ifindex, certificate_len, certificate, sk, sk_len))
 	{
 		uint32_t ske_len;
 		unsigned char* ske;
 		uint32_t skp_len;
 		unsigned char* skp;
 		// lprintf("Processor: \tObtaining SKE and SKP from the SK...\n");
-		if(MallocAndDHAndGenerateSharedkeys(sk_len, sk, &ske_len, &ske, &skp_len, &skp))
+		if(MallocAndDHAndGenerateSharedkeys(netns_id, ifindex, sk_len, sk, &ske_len, &ske, &skp_len, &skp))
 		{
 			// lprintf("Processor: \tRequesting a security table update...\n");
-			UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, -1, -1);
+			UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, -1);
 			free(ske);
 			ske = NULL;
 			free(skp);
@@ -185,7 +308,7 @@ void ReceivedSupermanCertificateExchange(uint32_t address, uint32_t sk_len, unsi
 			uint32_t our_cert_len;;
 			unsigned char* our_cert;
 			// lprintf("Processor: \tGrabbing our certificate...\n");
-			if(MallocAndCopyCertificate(&our_cert_len, &our_cert))
+			if(MallocAndCopyCertificate(netns_id, ifindex, &our_cert_len, &our_cert))
 			{
 
 				/*
@@ -219,7 +342,7 @@ void ReceivedSupermanCertificateExchange(uint32_t address, uint32_t sk_len, unsi
 
 				// Send the certificate exchange with the broadcast key. The broadcast key is in kernel memory.
 				// lprintf("Processor: \tRequesting to send a certificate exchange with broadcast key...\n");
-				SendSupermanCertificateExchangeWithBroadcastKey(address, our_cert_len, our_cert);
+				SendSupermanCertificateExchangeWithBroadcastKey(netns_id, ifindex, address, our_cert_len, our_cert);
 
 				free(our_cert);
 			}
@@ -229,20 +352,20 @@ void ReceivedSupermanCertificateExchange(uint32_t address, uint32_t sk_len, unsi
 		else
 		{
 			lprintf("Processor: \tFailed to generate SKE and SKP from the given SK.\n");
-			UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1, -1);
+			UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1);
 		}
 	}
 	else
 	{
 		lprintf("Processor: \tCertificate validation failed. Requesting a security table update.\n");
-		UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1, -1);
+		UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1);
 	}
 }
 
-void ReceivedSupermanCertificateExchangeWithBroadcastKey(uint32_t address, uint32_t sk_len, unsigned char* sk, uint32_t certificate_len, unsigned char* certificate, uint32_t broadcast_key_len, unsigned char* broadcast_key)
+void ReceivedSupermanCertificateExchangeWithBroadcastKey(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t sk_len, unsigned char* sk, uint32_t certificate_len, unsigned char* certificate, uint32_t broadcast_key_len, unsigned char* broadcast_key)
 {
 	// lprintf("Processor: \tVerifying certificate...\n");
-	if(VerifyCertificate(certificate_len, certificate, sk, sk_len))
+	if(VerifyCertificate(netns_id, ifindex, certificate_len, certificate, sk, sk_len))
 	{
 		uint32_t ske_len;
 		unsigned char* ske;
@@ -250,10 +373,10 @@ void ReceivedSupermanCertificateExchangeWithBroadcastKey(uint32_t address, uint3
 		unsigned char* skp;
 
 		// lprintf("Processor: \tObtaining SKE and SKP from the SK...\n");
-		if(MallocAndDHAndGenerateSharedkeys(sk_len, sk, &ske_len, &ske, &skp_len, &skp))
+		if(MallocAndDHAndGenerateSharedkeys(netns_id, ifindex, sk_len, sk, &ske_len, &ske, &skp_len, &skp))
 		{
 			// lprintf("Processor: \tRequesting a security table update...\n");
-			UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, -1, -1);
+			UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, -1);
 
 			free(ske);
 			ske = NULL;
@@ -266,9 +389,9 @@ void ReceivedSupermanCertificateExchangeWithBroadcastKey(uint32_t address, uint3
 				// This has to be done before we commit the new key.
 				// lprintf("Processor: \tRequesting a broadcast key update for nodes we're associated with...\n");
 
-				SendSupermanBroadcastKeyExchange(broadcast_key_len, broadcast_key, true);
+				SendSupermanBroadcastKeyExchange(netns_id, ifindex, broadcast_key_len, broadcast_key, true);
 
-				UpdateSupermanBroadcastKey(broadcast_key_len, broadcast_key, ske_len, ske, skp_len, skp, true);
+				UpdateSupermanBroadcastKey(netns_id, ifindex, broadcast_key_len, broadcast_key, ske_len, ske, skp_len, skp, true);
 
 				free(ske);
 				ske = NULL;
@@ -281,39 +404,39 @@ void ReceivedSupermanCertificateExchangeWithBroadcastKey(uint32_t address, uint3
 		else
 		{
 			lprintf("Processor: \tFailed to generate SKE and SKP from the given SK.\n");
-			UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1, -1);
+			UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1);
 		}
 	}
 	else
 	{
 		lprintf("Processor: \tCertificate validation failed. Requesting a security table update.\n");
-		UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1, -1);
+		UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1);
 	}
 }
 
-void ReceivedSupermanAuthenticatedSKResponse(uint32_t address, uint32_t sk_len, unsigned char* sk, int32_t timestamp, int32_t ifindex)
+void ReceivedSupermanAuthenticatedSKResponse(uint32_t netns_id, uint32_t ifindex, uint32_t address, uint32_t sk_len, unsigned char* sk, int32_t timestamp)
 {
 	uint32_t ske_len;
 	unsigned char* ske;
 	uint32_t skp_len;
 	unsigned char* skp;
-	if(MallocAndDHAndGenerateSharedkeys(sk_len, sk, &ske_len, &ske, &skp_len, &skp))
+	if(MallocAndDHAndGenerateSharedkeys(netns_id, ifindex, sk_len, sk, &ske_len, &ske, &skp_len, &skp))
 	{
 		//lprintf("Processor: SK Response - Keys for %u.%u.%u.%u:\n", 0x0ff & address, 0x0ff & (address >> 8), 0x0ff & (address >> 16), 0x0ff & (address >> 24));
 		//DumpKeys(sk_len, sk, ske_len, ske, skp_len, skp);
 
-		UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, ifindex);
+		UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED, sk_len, sk, ske_len, ske, skp_len, skp, timestamp);
 		free(ske);
 		free(skp);
 	}
 }
 
-void ReceivedSupermanSKInvalidate(uint32_t address)
+void ReceivedSupermanSKInvalidate(uint32_t netns_id, uint32_t ifindex, uint32_t address)
 {
-	UpdateSupermanSecurityTableEntry(address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1, -1);
+	UpdateSupermanSecurityTableEntry(netns_id, ifindex, address, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, "", 0, "", 0, "", -1);
 }
 
-void ReceivedSupermanBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadcast_key)
+void ReceivedSupermanBroadcastKeyExchange(uint32_t netns_id, uint32_t ifindex, uint32_t broadcast_key_len, unsigned char* broadcast_key)
 {
 	uint32_t ske_len;
 	unsigned char* ske;
@@ -321,7 +444,7 @@ void ReceivedSupermanBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned c
 	unsigned char* skp;
 	if(MallocAndGenerateSharedkeys(broadcast_key_len, broadcast_key, &ske_len, &ske, &skp_len, &skp))
 	{
-		UpdateSupermanBroadcastKey(broadcast_key_len, broadcast_key, ske_len, ske, skp_len, skp, true);
+		UpdateSupermanBroadcastKey(netns_id, ifindex, broadcast_key_len, broadcast_key, ske_len, ske, skp_len, skp, true);
 		free(ske);
 		ske = NULL;
 		free(skp);

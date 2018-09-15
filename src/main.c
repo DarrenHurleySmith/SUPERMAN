@@ -115,14 +115,14 @@ void usage(int status, char* progname)
 	 "           [if]            if mode, to enable or disable an interface\n"
 	 "           [test_cert]     test_cert mode, to test a certificate\n"
 	 "-c, --ca_cert [file]       Location of the CA public certificate\n"
-	 "-n, --node_cert [file]     Location of this nodes public certificate\n"
-	 "-p, --dh_privkey [file]    Location of the DH private key file\n"
 	 "-l, --logfile	[file]       Location of the log file\n"
 	 "-f, --disc_freq [freq ms]  The frequency with which to send discovery packets\n"
 	 "-t, --test_cert            Location of a certificate to check against\n"
 	 "-D, --Debug                Debug mode\n"
 	 "-i, --if iface             The interface to set the status of\n"
 	 "-s, --if_state [up|down]   The state of the interface\n"
+	 "-n, --node_cert [file]     Location of this nodes public certificate\n"
+	 "-p, --dh_privkey [file]    Location of the DH private key file\n"
 	 "-V, --version              Show version\n"
 	 "-?, --help                 Show help\n\n"
 	 "Dr Jodie Wetherall, <wj88@gre.ac.uk>\n\n", progname);
@@ -198,11 +198,11 @@ bool ProcessArgs(int argc, char **argv)
 					mode = mode_test_cert;
 				}
 				break;
-			case 'n':
-				node_cert_filename = optarg;
-				break;
 			case 'c':
 				ca_cert_filename = optarg;
+				break;
+			case 'n':
+				node_cert_filename = optarg;
 				break;
 			case 'p':
 				node_dh_privatekey_filename = optarg;
@@ -327,16 +327,16 @@ void Daemonise()
 
 void InvokeSendDiscoveryRequest()
 {
+	TriggerSupermanDiscoveryRequest();
+	// uint32_t sk_len;
+	// unsigned char* sk;
+	// if(MallocAndCopyPublickey(&sk_len, &sk))
+	// {
+	// 	//lprintf("Main: Calling SendSupermanDiscoveryRequest...\n");
+	// 	SendSupermanDiscoveryRequest(sk_len, sk);
 
-	uint32_t sk_len;
-	unsigned char* sk;
-	if(MallocAndCopyPublickey(&sk_len, &sk))
-	{
-		//lprintf("Main: Calling SendSupermanDiscoveryRequest...\n");
-		SendSupermanDiscoveryRequest(sk_len, sk);
-
-		free(sk);
-	}
+	// 	free(sk);
+	// }
 }
 
 void Run()
@@ -406,7 +406,7 @@ int main(int argc, char **argv)
 	//lprintf("Main: Initialising netlink...\n");
 	if(requiresNetlink)
 	{
-		if(!InitNetlink())
+		if(!InitNetlink(mode == mode_daemon))
 		{
 			exit(EXIT_FAILURE);
 		}
@@ -415,7 +415,7 @@ int main(int argc, char **argv)
 	//lprintf("Main: Initialising security...\n");
 	if(requiresSecurity)
 	{
-		if(!InitSecurity(ca_cert_filename, node_cert_filename, node_dh_privatekey_filename))
+		if(!InitSecurity(ca_cert_filename))
 		{
 			if(requiresNetlink)
 				DeInitNetlink();
@@ -426,7 +426,11 @@ int main(int argc, char **argv)
 	switch(mode)
 	{
 		case mode_if:
-			UpdateSupermanInterfaceTableEntry(strlen(if_name), if_name, (if_state == if_state_up));
+			if(if_state == if_state_up)
+				LoadNodeCertificateAndSecureInterface(strlen(node_cert_filename), node_cert_filename, strlen(node_dh_privatekey_filename), node_dh_privatekey_filename, strlen(if_name), if_name);
+			else
+				UnsecureInterfaceByName(strlen(if_name), if_name);
+			//UpdateSupermanInterfaceTableEntry(strlen(if_name), if_name, (if_state == if_state_up));
 			break;
 		case mode_test_cert:
 			TestCertificate(test_cert_filename);

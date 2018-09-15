@@ -35,13 +35,13 @@ void RefreshSupermanPacketInfo(struct superman_packet_info* spi)
 	)
 	{
 		// If we should use the broadcast key and we don't have one.
-		if(spi->e2e_use_broadcast_key && ((!GetSecurityTableEntry(INADDR_BROADCAST, &(spi->e2e_security_details))) || spi->e2e_security_details->flag < SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED))
+		if(spi->e2e_use_broadcast_key && ((!GetSecurityTableEntry(spi->net, spi->dev->ifindex, INADDR_BROADCAST, &(spi->e2e_security_details))) || spi->e2e_security_details->flag < SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED))
 		{
 			printk(KERN_INFO "SUPERMAN: packet_info - \tNo broadcast key.\n");
 			spi->e2e_has_security_details = false;
 		}
 		// If it isn't a broadcast packet and we don't have the targets key.
-		else if(!spi->e2e_use_broadcast_key && ((!GetSecurityTableEntry(spi->e2e_addr, &(spi->e2e_security_details))) || spi->e2e_security_details->flag == SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE))
+		else if(!spi->e2e_use_broadcast_key && ((!GetSecurityTableEntry(spi->net, spi->dev->ifindex, spi->e2e_addr, &(spi->e2e_security_details))) || spi->e2e_security_details->flag == SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE))
 		{
 			printk(KERN_INFO "SUPERMAN: packet_info: e2e no security entry for %u.%u.%u.%u.\n", 0x0ff & spi->e2e_addr, 0x0ff & (spi->e2e_addr >> 8), 0x0ff & (spi->e2e_addr >> 16), 0x0ff & (spi->e2e_addr >> 24));
 			spi->e2e_has_security_details = false;
@@ -65,7 +65,7 @@ void RefreshSupermanPacketInfo(struct superman_packet_info* spi)
 		// Lookup the next hop and grab the security credentials
 		if(spi->p2p_use_broadcast_key)
 		{
-			spi->p2p_has_security_details = GetSecurityTableEntry(INADDR_BROADCAST, &(spi->p2p_security_details));
+			spi->p2p_has_security_details = GetSecurityTableEntry(spi->net, spi->dev->ifindex, INADDR_BROADCAST, &(spi->p2p_security_details));
 		}
 		else
 		{
@@ -102,7 +102,7 @@ void RefreshSupermanPacketInfo(struct superman_packet_info* spi)
 				spi->p2p_our_addr = spi->ifaddr;
 			}
 
-			if(!GetSecurityTableEntry(spi->p2p_neighbour_addr, &(spi->p2p_security_details)))
+			if(!GetSecurityTableEntry(spi->net, spi->dev->ifindex, spi->p2p_neighbour_addr, &(spi->p2p_security_details)))
 			{
 				printk(KERN_INFO "SUPERMAN: packet_info: p2p no security entry for neighbour %u.%u.%u.%u.\n", 0x0ff & spi->p2p_neighbour_addr, 0x0ff & (spi->p2p_neighbour_addr >> 8), 0x0ff & (spi->p2p_neighbour_addr >> 16), 0x0ff & (spi->p2p_neighbour_addr >> 24));
 				spi->p2p_has_security_details = false;
@@ -115,7 +115,6 @@ void RefreshSupermanPacketInfo(struct superman_packet_info* spi)
 					spi->p2p_has_security_details = spi->p2p_security_details->flag >= SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED;
 				//printk(KERN_INFO "SUPERMAN: packet_info: p2p sec for neighbour %u.%u.%u.%u, flag = %d, sec = %s.\n", 0x0ff & spi->p2p_neighbour_addr, 0x0ff & (spi->p2p_neighbour_addr >> 8), 0x0ff & (spi->p2p_neighbour_addr >> 16), 0x0ff & (spi->p2p_neighbour_addr >> 24), spi->p2p_security_details->flag, (spi->p2p_has_security_details ? "true" : "false"));
 			}
-
 		}
 	}
 }
@@ -140,6 +139,7 @@ struct superman_packet_info* MallocSupermanPacketInfo(struct sk_buff *skb, const
 	spi->okfn = (state != NULL ? state->okfn : NULL);
 	spi->sk = (state != NULL ? state->sk : NULL);
 	spi->net = (state != NULL ? state->net : NULL);
+	spi->dev = (skb != NULL ? skb->dev : NULL);
 
 	// Packet arrival isn't always linear which breaks things. Fix that here.
 	skb_linearize(skb);
@@ -170,12 +170,16 @@ struct superman_packet_info* MallocSupermanPacketInfo(struct sk_buff *skb, const
 	memset(&spi->bcaddr, 0, sizeof(struct in_addr));
 	if(state != NULL && (spi->hook == NF_INET_PRE_ROUTING || spi->hook == NF_INET_LOCAL_IN))
 	{
+		if(spi->dev == NULL)
+			spi->dev = state->in;
 		if(state->in != NULL)
 			if_info_from_net_device(&spi->ifaddr, &spi->bcaddr, state->in);
 		spi->e2e_addr = spi->iph->saddr;
 	}
 	else if(state != NULL && (spi->hook == NF_INET_POST_ROUTING || spi->hook == NF_INET_LOCAL_OUT || spi->hook == NF_INET_FORWARD))
 	{
+		if(spi->dev == NULL)
+			spi->dev = state->out;
 		if(state->out != NULL)
 			if_info_from_net_device(&spi->ifaddr, &spi->bcaddr, state->out);
 		spi->e2e_addr = spi->iph->daddr;
@@ -183,6 +187,8 @@ struct superman_packet_info* MallocSupermanPacketInfo(struct sk_buff *skb, const
 	// If all else fails, we probably generated this packet ourselves.
 	else
 	{
+		// Lookup the dev? Makes sense...
+
 		spi->e2e_addr = htonl(0);
 
 		/*

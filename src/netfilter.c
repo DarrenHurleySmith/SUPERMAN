@@ -15,13 +15,13 @@
 #include "processor.h"
 #include "queue.h"
 
-#define HOOK_DEF(func_name, ops_name, hook_num)																	\
-unsigned int func_name(void* priv, struct sk_buff *skb, const struct nf_hook_state *state);		\
-static struct nf_hook_ops ops_name = {																		\
-	.hook 		= func_name,																		\
-	.pf		= NFPROTO_IPV4,																		\
-	.hooknum 	= hook_num,																		\
-	.priority	= NF_IP_PRI_FIRST,																	\
+#define HOOK_DEF(func_name, ops_name, hook_num)													\
+unsigned int func_name(void *priv, struct sk_buff *skb, const struct nf_hook_state *state);	\
+static struct nf_hook_ops ops_name = {								\
+	.hook 		= func_name,								\
+	.pf		= NFPROTO_IPV4,								\
+	.hooknum 	= hook_num,								\
+	.priority	= NF_IP_PRI_FIRST,							\
 };
 
 // Useful reference: http://phrack.org/issues/61/13.html
@@ -218,7 +218,7 @@ unsigned int process_certificate_exchange_packet(struct superman_packet_info* sp
 	{
 		certificate_len = ntohs(p->certificate_len);
 		certificate = p->certificate;
-		ReceivedSupermanCertificateExchange(spi->e2e_addr, certificate_len, certificate);
+		ReceivedSupermanCertificateExchange(GetNSIDFromNet(spi->net), spi->dev->ifindex, spi->e2e_addr, certificate_len, certificate);
 	}
 	else
 	{
@@ -257,7 +257,7 @@ unsigned int process_certificate_exchange_with_broadcast_key_packet(struct super
 		certificate = p->data;
 		broadcast_key = (p->data + certificate_len);
 
-		ReceivedSupermanCertificateExchangeWithBroadcastKey(spi->e2e_addr, certificate_len, certificate, broadcast_key_len, broadcast_key);
+		ReceivedSupermanCertificateExchangeWithBroadcastKey(GetNSIDFromNet(spi->net), spi->dev->ifindex, spi->e2e_addr, certificate_len, certificate, broadcast_key_len, broadcast_key);
 	}
 	else
 	{
@@ -289,7 +289,7 @@ unsigned int process_broadcast_key_exchange_packet(struct superman_packet_info* 
 		broadcast_key_len = ntohs(p->broadcast_key_len);
 		broadcast_key = p->broadcast_key;
 
-		ReceivedSupermanBroadcastKeyExchange(broadcast_key_len, broadcast_key);
+		ReceivedSupermanBroadcastKeyExchange(GetNSIDFromNet(spi->net), spi->dev->ifindex, broadcast_key_len, broadcast_key);
 	}
 	else
 	{
@@ -315,7 +315,7 @@ unsigned int process_sk_invalidate_packet(struct superman_packet_info* spi)
 	payload = (struct sk_invalidate_payload*)spi->payload;
 	addr = payload->addr;
 
-	ReceivedSupermanSKInvalidate(addr);
+	ReceivedSupermanSKInvalidate(GetNSIDFromNet(spi->net), spi->dev->ifindex, addr);
 
 	spi->result = NF_DROP;				// Don't let an Invalidate SK propogate higher up the stack
 	return FreeSupermanPacketInfo(spi);
@@ -335,12 +335,12 @@ unsigned int process_authenticated_sk_request(struct superman_packet_info* spi)
 	targetaddr = ntohl(payload->targetaddr);
 
 	// If we don't have it, we can request it too.
-	if(!GetSecurityTableEntry(targetaddr, &security_details))
-		SendAuthenticatedSKRequestPacket(spi->net, originaddr, targetaddr);
+	if(!GetSecurityTableEntry(spi->net, spi->dev->ifindex, targetaddr, &security_details))
+		SendAuthenticatedSKRequestPacket(spi->net, spi->dev->ifindex, originaddr, targetaddr);
 
 	// Otherwise, we can share the answer we already have.
 	else
-		SendAuthenticatedSKResponsePacket(spi->net, originaddr, targetaddr, security_details->sk_len, security_details->sk);
+		SendAuthenticatedSKResponsePacket(spi->net, spi->dev->ifindex, originaddr, targetaddr, security_details->sk_len, security_details->sk);
 
 	spi->result = NF_DROP;				// Don't let an Authenticated SK Request propogate higher up the stack
 	return FreeSupermanPacketInfo(spi);
@@ -364,16 +364,16 @@ unsigned int process_authenticated_sk_response(struct superman_packet_info* spi)
 	sk = (unsigned char*)(payload->sk);
 
 	// Grab a copy if we don't have it already.
-	if(GetSecurityTableEntry(targetaddr, &security_details) && security_details->flag < SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED)
+	if(GetSecurityTableEntry(spi->net, spi->dev->ifindex, targetaddr, &security_details) && security_details->flag < SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED)
 	{
-		ReceivedSupermanAuthenticatedSKResponse(targetaddr, sk_len, sk, spi->shdr->timestamp, spi->skb->skb_iif);
+		ReceivedSupermanAuthenticatedSKResponse(GetNSIDFromNet(spi->net), spi->dev->ifindex, targetaddr, sk_len, sk, spi->shdr->timestamp);
 	}
 
 	// If it wasn't actually destined for us, pass it one.
 	if(spi->p2p_our_addr != originaddr)
 	{
 		//printk(KERN_INFO "SUPERMAN: Netfilter - process_authenticated_sk_response (our_addr: %u.%u.%u.%u, originaddr: %u.%u.%u.%u).\n", 0x0ff & spi->p2p_our_addr, 0x0ff & (spi->p2p_our_addr >> 8), 0x0ff & (spi->p2p_our_addr >> 16), 0x0ff & (spi->p2p_our_addr >> 24), 0x0ff & originaddr, 0x0ff & (originaddr >> 8), 0x0ff & (originaddr >> 16), 0x0ff & (originaddr >> 24));
-		SendAuthenticatedSKResponsePacket(spi->net, originaddr, targetaddr, sk_len, sk);
+		SendAuthenticatedSKResponsePacket(spi->net, spi->dev->ifindex, originaddr, targetaddr, sk_len, sk);
 	}
 
 	spi->result = NF_DROP;				// Don't let an Authenticated SK Response propogate higher up the stack
@@ -553,7 +553,7 @@ unsigned int hook_localout_post_sk_response(struct superman_packet_info* spi, bo
 }
 
 // After sanity checks, before routing decisions.
-unsigned int hook_prerouting(void* priv, struct sk_buff *skb, const struct nf_hook_state *state)
+unsigned int hook_prerouting(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
 {
 	struct superman_packet_info* spi;
 	// printk(KERN_INFO "SUPERMAN: Netfilter (PREROUTING)\n");
@@ -593,14 +593,14 @@ unsigned int hook_prerouting(void* priv, struct sk_buff *skb, const struct nf_ho
 		{
 			case SUPERMAN_DISCOVERY_REQUEST_TYPE:			// It's a Discovery Request
 				// printk(KERN_INFO "SUPERMAN: Netfilter (PREROUTING) - \t\tDiscovery Request Packet.\n");
-				ReceivedSupermanDiscoveryRequest(spi->e2e_addr, ntohs(spi->shdr->payload_len), spi->payload, spi->shdr->timestamp, spi->skb->skb_iif);
+				ReceivedSupermanDiscoveryRequest(GetNSIDFromNet(spi->net), spi->dev->ifindex, spi->e2e_addr, ntohs(spi->shdr->payload_len), spi->payload, spi->shdr->timestamp);
 				spi->result = NF_DROP;
 				return FreeSupermanPacketInfo(spi);
 				break;
 
 			case SUPERMAN_CERTIFICATE_REQUEST_TYPE:			// It's a Certificate Request
 				// printk(KERN_INFO "SUPERMAN: Netfilter (PREROUTING) - \t\tCertificate Request Packet.\n");
-				ReceivedSupermanCertificateRequest(spi->e2e_addr, ntohs(spi->shdr->payload_len), spi->payload, spi->shdr->timestamp, spi->skb->skb_iif);
+				ReceivedSupermanCertificateRequest(GetNSIDFromNet(spi->net), spi->dev->ifindex, spi->e2e_addr, ntohs(spi->shdr->payload_len), spi->payload, spi->shdr->timestamp);
 				spi->result = NF_DROP;
 				return FreeSupermanPacketInfo(spi);
 				break;
@@ -641,7 +641,7 @@ unsigned int hook_prerouting(void* priv, struct sk_buff *skb, const struct nf_ho
 				{
 					//printk(KERN_INFO "SUPERMAN: Netfilter (PREROUTING) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->p2p_neighbour_addr);
-					SendAuthenticatedSKRequestPacket(state->net, 0, spi->p2p_neighbour_addr);
+					SendAuthenticatedSKRequestPacket(spi->net, spi->dev->ifindex, 0, spi->p2p_neighbour_addr);
 				}
 
 				return spi->result;
@@ -660,7 +660,7 @@ unsigned int hook_prerouting(void* priv, struct sk_buff *skb, const struct nf_ho
 }
 
 // After routing decisions if packet is for this host.
-unsigned int hook_localin(void* priv, struct sk_buff *skb, const struct nf_hook_state *state)
+unsigned int hook_localin(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
 {
 	struct superman_packet_info* spi;
 	// printk(KERN_INFO "SUPERMAN: Netfilter (LOCALIN)\n");
@@ -712,7 +712,7 @@ unsigned int hook_localin(void* priv, struct sk_buff *skb, const struct nf_hook_
 				{
 					//printk(KERN_INFO "SUPERMAN: Netfilter (LOCALIN) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->e2e_addr);
-					SendAuthenticatedSKRequestPacket(spi->net, 0, spi->e2e_addr);
+					SendAuthenticatedSKRequestPacket(spi->net, spi->dev->ifindex, 0, spi->e2e_addr);
 				}
 
 				return spi->result;
@@ -729,7 +729,7 @@ unsigned int hook_localin(void* priv, struct sk_buff *skb, const struct nf_hook_
 
 // If the packet is destined for another interface.
 // NOTE: This is added for debugging purposes only and isn't actually needed.
-unsigned int hook_forward(void* priv, struct sk_buff *skb, const struct nf_hook_state *state)
+unsigned int hook_forward(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
 {
 	return NF_ACCEPT;
 
@@ -755,7 +755,7 @@ unsigned int hook_forward(void* priv, struct sk_buff *skb, const struct nf_hook_
 
 
 // For packets coming from local processes on their way out.
-unsigned int hook_localout(void* priv, struct sk_buff *skb, const struct nf_hook_state *state)
+unsigned int hook_localout(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
 {
 	struct superman_packet_info* spi;
 	//printk(KERN_INFO "SUPERMAN: Netfilter (LOCALOUT)\n");
@@ -811,7 +811,7 @@ unsigned int hook_localout(void* priv, struct sk_buff *skb, const struct nf_hook
 				{
 					//printk(KERN_ERR "SUPERMAN: Netfilter (LOCALOUT) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->e2e_addr);
-					SendAuthenticatedSKRequestPacket(spi->net, 0, spi->e2e_addr);
+					SendAuthenticatedSKRequestPacket(spi->net, spi->dev->ifindex, 0, spi->e2e_addr);
 				}
 
 				return spi->result;
@@ -828,7 +828,7 @@ unsigned int hook_localout(void* priv, struct sk_buff *skb, const struct nf_hook
 }
 
 // Just before outbound packets "hit the wire".
-unsigned int hook_postrouting(void* priv, struct sk_buff *skb, const struct nf_hook_state *state)
+unsigned int hook_postrouting(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
 {
 	struct superman_packet_info* spi;
 	// printk(KERN_INFO "SUPERMAN: Netfilter (POSTROUTING)\n");
@@ -912,7 +912,7 @@ unsigned int hook_postrouting(void* priv, struct sk_buff *skb, const struct nf_h
 				{
 					//printk(KERN_INFO "SUPERMAN: Netfilter (POSTROUTING) - \t\tWe don't have the the security details. Sending an SK Request.\n");
 					//EnqueueSKRequest(0, spi->p2p_neighbour_addr);
-					SendAuthenticatedSKRequestPacket(spi->net, 0, spi->p2p_neighbour_addr);
+					SendAuthenticatedSKRequestPacket(spi->net, spi->dev->ifindex, 0, spi->p2p_neighbour_addr);
 				}
 
 				return spi->result;

@@ -121,9 +121,11 @@ inline struct superman_header* get_superman_header(struct sk_buff *skb)
 }
 
 
-unsigned int send_superman_packet(struct net* net, struct sk_buff* tx_sk, bool has_dst)
+unsigned int send_superman_packet(struct net* net, uint32_t ifindex, struct sk_buff* tx_sk, bool has_dst)
 {
 	struct superman_packet_info* spi = MallocSupermanPacketInfo(tx_sk, NULL);
+	spi->net = net;
+	spi->dev = dev_get_by_index(net, ifindex);
 	spi->result = NF_ACCEPT;
 
 	tx_sk->protocol = htons(ETH_P_IP);
@@ -324,14 +326,11 @@ bool DecapsulatePacket(struct superman_packet_info* spi)
 	return true;
 }
 
-void SendDiscoveryRequestPacket(uint32_t sk_len, unsigned char* sk)
+void SendDiscoveryRequestPacket(struct net *net, uint32_t ifindex, uint32_t sk_len, unsigned char* sk)
 {
-	struct net *net;
-	struct net_device *dev;
+	struct net_device *dev = dev_get_by_index(net, ifindex);
 
 	// printk(KERN_INFO "SUPERMAN: Packet - \tSend Discovery Request...\n");
-
-	INTERFACE_ITERATOR_START(net, dev)
 
 	struct sk_buff* tx_sk;
 	struct superman_header* shdr;
@@ -345,7 +344,7 @@ void SendDiscoveryRequestPacket(uint32_t sk_len, unsigned char* sk)
 	if(!if_info_from_net_device(&oaddr, &baddr, dev))
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tFailed to lookup the IP address info.");
-		continue;
+		return;
 	}
 
 	// printk(KERN_INFO "SUPERMAN: Packet (SendDiscoveryRequestPacket) - our addr: %u.%u.%u.%u, our bcast: %u.%u.%u.%u.\n", 0x0ff & addr, 0x0ff & (addr >> 8), 0x0ff & (addr >> 16), 0x0ff & (addr >> 24), 0x0ff & baddr, 0x0ff & (baddr >> 8), 0x0ff & (baddr >> 16), 0x0ff & (baddr >> 24));
@@ -357,7 +356,7 @@ void SendDiscoveryRequestPacket(uint32_t sk_len, unsigned char* sk)
 	if(tx_sk == NULL)
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tFailed to allocate a new skb.");
-		continue;
+		return;
 	}
 	tx_sk->dev = dev;
 	tx_sk->pkt_type = PACKET_OUTGOING | PACKET_BROADCAST;				// Its outgoing.
@@ -400,18 +399,16 @@ void SendDiscoveryRequestPacket(uint32_t sk_len, unsigned char* sk)
 	//iph->daddr = ((iph->saddr & 0x00FFFFFF) + 0xFF000000),			// Broadcast the message to all on the subnet
 	iph->daddr = baddr;							// Broadcast the message to all on the subnet
 
-	send_superman_packet(net, tx_sk, false);
+	send_superman_packet(net, ifindex, tx_sk, false);
 	//spi = MallocSupermanPacketInfo(tx_sk, NULL);
 	//send_superman_packet(spi, true);
 
-	INTERFACE_ITERATOR_END
 	// printk(KERN_INFO "SUPERMAN: Packet - \t... Send Discovery Request done.\n");
 }
 
-void SendCertificateRequestPacket(uint32_t addr, uint32_t sk_len, unsigned char* sk)
+void SendCertificateRequestPacket(struct net *net, uint32_t ifindex, uint32_t addr, uint32_t sk_len, unsigned char* sk)
 {
 	struct security_table_entry* ste;
-	struct net *net;
 	struct net_device *dev;
 	struct in_addr;
 	struct sk_buff* tx_sk;
@@ -423,15 +420,14 @@ void SendCertificateRequestPacket(uint32_t addr, uint32_t sk_len, unsigned char*
 	// printk(KERN_INFO "SUPERMAN: Packet - \tSend Certificate Request to %u.%u.%u.%u...\n", 0x0ff & addr, 0x0ff & (addr >> 8), 0x0ff & (addr >> 16), 0x0ff & (addr >> 24));
 
 	// Grab some information about the interface.
-	if(!GetSecurityTableEntry(addr, &ste))
+	if(!GetSecurityTableEntry(net, ifindex, addr, &ste))
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for address %d.%d.%d.%d.\n", 0x0ff & addr, 0x0ff & (addr >> 8), 0x0ff & (addr >> 16), 0x0ff & (addr >> 24));
 		return;
 	}
 
 	// Grab a device reference. We must dereference later (dev_put).
-	net = ste->net;
-	dev = dev_get_by_index(net, ste->ifindex);
+	dev = dev_get_by_index(net, ifindex);
 	if(dev == NULL)
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for interface %i.\n", ste->ifindex);
@@ -485,19 +481,18 @@ void SendCertificateRequestPacket(uint32_t addr, uint32_t sk_len, unsigned char*
 	iph->saddr = inet_select_addr(dev, addr, RT_SCOPE_UNIVERSE);			// Grab the most appropriate address.
 	iph->daddr = addr;								// Broadcast the message to all on the subnet
 
-	send_superman_packet(net, tx_sk, false);
+	send_superman_packet(net, ifindex, tx_sk, false);
 	//spi = MallocSupermanPacketInfo(tx_sk, NULL);
 	//send_superman_packet(spi, true);
 
 	// Dereference the device.
-	dev_put(dev);
+	//dev_put(dev);
 	// printk(KERN_INFO "SUPERMAN: Packet - \t... Send Certificate Request done.\n");
 }
 
-void SendCertificateExchangePacket(uint32_t addr, uint32_t certificate_len, unsigned char* certificate)
+void SendCertificateExchangePacket(struct net *net, uint32_t ifindex, uint32_t addr, uint32_t certificate_len, unsigned char* certificate)
 {
 	struct security_table_entry* ste;
-	struct net *net;
 	struct net_device *dev;
 	//struct dst_entry* dst;
 	struct in_addr;
@@ -510,15 +505,14 @@ void SendCertificateExchangePacket(uint32_t addr, uint32_t certificate_len, unsi
 	// printk(KERN_INFO "SUPERMAN: Packet - \tSend Certificate Exchange to %u.%u.%u.%u...\n", 0x0ff & addr, 0x0ff & (addr >> 8), 0x0ff & (addr >> 16), 0x0ff & (addr >> 24));
 
 	// Grab some information about the interface.
-	if(!GetSecurityTableEntry(addr, &ste))
+	if(!GetSecurityTableEntry(net, ifindex, addr, &ste))
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for address %d.%d.%d.%d.\n", 0x0ff & addr, 0x0ff & (addr >> 8), 0x0ff & (addr >> 16), 0x0ff & (addr >> 24));
 		return;
 	}
 
 	// Grab a device reference. We must dereference later (dev_put).
-	net = ste->net;
-	dev = dev_get_by_index(net, ste->ifindex);
+	dev = dev_get_by_index(net, ifindex);
 	if(dev == NULL)
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for interface %i.\n", ste->ifindex);
@@ -575,7 +569,7 @@ void SendCertificateExchangePacket(uint32_t addr, uint32_t certificate_len, unsi
 	iph->saddr = inet_select_addr(dev, addr, RT_SCOPE_UNIVERSE);			// Grab the most appropriate address.
 	iph->daddr = addr;								// Broadcast the message to all on the subnet
 
-	send_superman_packet(net, tx_sk, false);
+	send_superman_packet(net, ifindex, tx_sk, false);
 
 	// tx_sk->protocol = htons(ETH_P_IP);
 	// tx_sk->sk = NULL;
@@ -603,10 +597,9 @@ void SendCertificateExchangePacket(uint32_t addr, uint32_t certificate_len, unsi
 	// printk(KERN_INFO "SUPERMAN: Packet - \t... Send Certificate Exchange done.\n");
 }
 
-void SendCertificateExchangeWithBroadcastKeyPacket(uint32_t addr, uint32_t certificate_len, unsigned char* certificate, uint32_t broadcast_key_len, unsigned char* broadcast_key)
+void SendCertificateExchangeWithBroadcastKeyPacket(struct net *net, uint32_t ifindex, uint32_t addr, uint32_t certificate_len, unsigned char* certificate, uint32_t broadcast_key_len, unsigned char* broadcast_key)
 {
 	struct security_table_entry* ste;
-	struct net *net;
 	struct net_device *dev;
 	//struct dst_entry* dst;
 	struct in_addr;
@@ -620,18 +613,17 @@ void SendCertificateExchangeWithBroadcastKeyPacket(uint32_t addr, uint32_t certi
 	// printk(KERN_INFO "SUPERMAN: Packet - \tCertificate len: %u, Broadcast Key len: %u.\n", certificate_len, broadcast_key_len);
 
 	// Grab some information about the interface.
-	if(!GetSecurityTableEntry(addr, &ste))
+	if(!GetSecurityTableEntry(net, ifindex, addr, &ste))
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for address %d.%d.%d.%d.\n", 0x0ff & addr, 0x0ff & (addr >> 8), 0x0ff & (addr >> 16), 0x0ff & (addr >> 24));
 		return;
 	}
 
 	// Grab a device reference. We must dereference later (dev_put).
-	net = ste->net;
-	dev = dev_get_by_index(net, ste->ifindex);
+	dev = dev_get_by_index(net, ifindex);
 	if(dev == NULL)
 	{
-		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for interface %i.\n", ste->ifindex);
+		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for interface %i.\n", ifindex);
 		return;
 	}
 
@@ -687,7 +679,7 @@ void SendCertificateExchangeWithBroadcastKeyPacket(uint32_t addr, uint32_t certi
 	iph->saddr = inet_select_addr(dev, addr, RT_SCOPE_UNIVERSE);			// Grab the most appropriate address.
 	iph->daddr = addr;								// Broadcast the message to all on the subnet
 
-	send_superman_packet(net, tx_sk, false);
+	send_superman_packet(net, ifindex, tx_sk, false);
 
 	// tx_sk->protocol = htons(ETH_P_IP);
 	// tx_sk->sk = NULL;
@@ -716,7 +708,7 @@ void SendCertificateExchangeWithBroadcastKeyPacket(uint32_t addr, uint32_t certi
 	// printk(KERN_INFO "SUPERMAN: Packet - \t... Send Certificate Exchange With Broadcast Key done.\n");
 }
 
-void SendAuthenticatedSKResponsePacket(struct net *net, uint32_t originaddr, uint32_t targetaddr, uint32_t sk_len, unsigned char* sk)
+void SendAuthenticatedSKResponsePacket(struct net *net, uint32_t ifindex, uint32_t originaddr, uint32_t targetaddr, uint32_t sk_len, unsigned char* sk)
 {
 	struct sk_buff* tx_sk;
 	struct iphdr* iph;
@@ -735,7 +727,7 @@ void SendAuthenticatedSKResponsePacket(struct net *net, uint32_t originaddr, uin
 	memset(&fl4, 0, sizeof(fl4));
 	fl4.daddr = originaddr;
 	fl4.flowi4_flags = 0x08;
- 	rt = ip_route_output_key(&init_net, &fl4);
+ 	rt = ip_route_output_key(net, &fl4);
  	if (IS_ERR(rt))
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \tip_route_output_key error!\n");
@@ -823,12 +815,12 @@ void SendAuthenticatedSKResponsePacket(struct net *net, uint32_t originaddr, uin
 	// if(ip_local_out(tx_sk) == NF_DROP)
 	//	kfree_skb(tx_sk);
 
-	send_superman_packet(net, tx_sk, true);
+	send_superman_packet(net, ifindex, tx_sk, true);
 
 	//printk(KERN_INFO "SUPERMAN: Packet - \tSK Response sent.\n");
 }
 
-void SendAuthenticatedSKRequestPacket(struct net *net, uint32_t originaddr, uint32_t targetaddr)
+void SendAuthenticatedSKRequestPacket(struct net *net, uint32_t ifindex, uint32_t originaddr, uint32_t targetaddr)
 {
 	struct sk_buff* tx_sk;
 	struct iphdr* iph;
@@ -933,19 +925,16 @@ void SendAuthenticatedSKRequestPacket(struct net *net, uint32_t originaddr, uint
 	//	kfree_skb(tx_sk);
 
 	// Update the security table to log the fact that we've made this request.
-	UpdateSecurityTableEntryFlag(targetaddr, SUPERMAN_SECURITYTABLE_FLAG_SEC_REQUESTED, -1, net, rt->rt_iif);
+	UpdateSecurityTableEntryFlag(net, ifindex, targetaddr, SUPERMAN_SECURITYTABLE_FLAG_SEC_REQUESTED, -1);
 
-	send_superman_packet(net, tx_sk, true);
+	send_superman_packet(net, ifindex, tx_sk, true);
 
 	//printk(KERN_INFO "SUPERMAN: Packet - \t SK Request sent.\n");
 }
 
-void SendSKInvalidatePacket(uint32_t addr)
+void SendSKInvalidatePacket(struct net *net, uint32_t ifindex, uint32_t addr)
 {
-	struct net *net;
 	struct net_device *dev;
-
-	INTERFACE_ITERATOR_START(net, dev)
 
 	struct in_addr;
 	struct sk_buff* tx_sk;
@@ -953,16 +942,24 @@ void SendSKInvalidatePacket(uint32_t addr)
 	struct superman_header* shdr;
 	struct iphdr* iph;
 	void* payload;
+	__be32 oaddr;
+	__be32 baddr;
 	//struct superman_packet_info* spi;
 
 	// printk(KERN_INFO "SUPERMAN: Packet - \tSend SK Invalidate...\n");
 
-	__be32 oaddr;
-	__be32 baddr;
+	// Grab a device reference. We must dereference later (dev_put).
+	dev = dev_get_by_index(net, ifindex);
+	if(dev == NULL)
+	{
+		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for interface %i.\n", ifindex);
+		return;
+	}
+
 	if(!if_info_from_net_device(&oaddr, &baddr, dev))
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tFailed to lookup the IP address info.");
-		continue;
+		return;
 	}
 
 	// Allocate a new packet
@@ -970,7 +967,7 @@ void SendSKInvalidatePacket(uint32_t addr)
 	if(tx_sk == NULL)
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tFailed to allocate a new skb.");
-		continue;
+		return;
 	}
 	tx_sk->dev = dev;
 	tx_sk->pkt_type = PACKET_OUTGOING | PACKET_BROADCAST;				// Its outgoing.
@@ -1013,7 +1010,7 @@ void SendSKInvalidatePacket(uint32_t addr)
 	iph->saddr = inet_select_addr(dev, baddr, RT_SCOPE_UNIVERSE);	// Grab the most appropriate address.
 	iph->daddr = baddr;						// Broadcast the message to all on the subnet
 
-	send_superman_packet(net, tx_sk, false);
+	send_superman_packet(net, ifindex, tx_sk, false);
 
 	// tx_sk->protocol = htons(ETH_P_IP);
 	// tx_sk->sk = NULL;
@@ -1037,17 +1034,16 @@ void SendSKInvalidatePacket(uint32_t addr)
 	//spi = MallocSupermanPacketInfo(tx_sk, NULL);
 	//AddE2ESecurity(spi, hash_then_send_superman_packet);
 
-	INTERFACE_ITERATOR_END
+	//INTERFACE_ITERATOR_END
 	// printk(KERN_INFO "SUPERMAN: Packet - \t... Send SK Invalidate done.\n");
 }
 
 
-void SendBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadcast_key)
+void SendBroadcastKeyExchange(struct net *net, uint32_t ifindex, uint32_t broadcast_key_len, unsigned char* broadcast_key)
 {
-	struct net *net;
 	struct net_device *dev;
 
-	INTERFACE_ITERATOR_START(net, dev)
+	// INTERFACE_ITERATOR_START(net, dev)
 
 	struct in_addr;
 	struct sk_buff* tx_sk;
@@ -1055,16 +1051,24 @@ void SendBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadca
 	struct superman_header* shdr;
 	struct iphdr* iph;
 	void* payload;
+	__be32 addr;
+	__be32 baddr;
 	//struct superman_packet_info* spi;
 
 	// printk(KERN_INFO "SUPERMAN: Packet - \tSend Broadcast Key Exchange...\n");
 
-	__be32 addr;
-	__be32 baddr;
+	// Grab a device reference. We must dereference later (dev_put).
+	dev = dev_get_by_index(net, ifindex);
+	if(dev == NULL)
+	{
+		printk(KERN_INFO "SUPERMAN: Packet - \t\tNo device for interface %i.\n", ifindex);
+		return;
+	}
+
 	if(!if_info_from_net_device(&addr, &baddr, dev))
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tFailed to lookup the IP address info.");
-		continue;
+		return;
 	}
 
 	// Allocate a new packet
@@ -1072,7 +1076,7 @@ void SendBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadca
 	if(tx_sk == NULL)
 	{
 		printk(KERN_INFO "SUPERMAN: Packet - \t\tFailed to allocate a new skb.");
-		continue;
+		return;
 	}
 	tx_sk->dev = dev;
 	tx_sk->pkt_type = PACKET_OUTGOING | PACKET_BROADCAST;				// Its outgoing.
@@ -1117,7 +1121,7 @@ void SendBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadca
 	iph->saddr = inet_select_addr(dev, baddr, RT_SCOPE_UNIVERSE);	// Grab the most appropriate address.
 	iph->daddr = baddr;						// Broadcast the message to all on the subnet
 
-	send_superman_packet(net, tx_sk, false);
+	send_superman_packet(net, ifindex, tx_sk, false);
 
 	// tx_sk->protocol = htons(ETH_P_IP);
 	// tx_sk->sk = NULL;
@@ -1141,7 +1145,7 @@ void SendBroadcastKeyExchange(uint32_t broadcast_key_len, unsigned char* broadca
 	//spi = MallocSupermanPacketInfo(tx_sk, NULL);
 	//AddE2ESecurity(spi, hash_then_send_superman_packet);
 
-	INTERFACE_ITERATOR_END
+//	INTERFACE_ITERATOR_END
 	// printk(KERN_INFO "SUPERMAN: Packet - \t... Send Broadcast Key Exchange done.\n");
 
 }

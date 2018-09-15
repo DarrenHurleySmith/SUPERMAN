@@ -1,6 +1,10 @@
-define aptInstall =
-bash -c '. ../test/common.sh; aptInstall $1;'
-endef
+#
+# Makefile for the SUPERMAN daemon.
+#
+# Written by Dr Jodie Wetherall <wj88@gre.ac.uk>
+#
+# Dependancies:
+# build-essential make pkg-config libnl-3-dev libnl-genl-3-dev libssl-dev
 
 CC=gcc
 CFLAGS= -Wno-write-strings `pkg-config --cflags libnl-3.0 libnl-genl-3.0 openssl`
@@ -12,14 +16,10 @@ OUTPUT=superman
 .DEFAULT_GOAL := all
 .PHONY: clean top
 
-$(info Building SUPERMAN daemon)
-
 all: main-build
 
-pre-build:
-	@$(call aptInstall,"libnl-3-dev libnl-genl-3-dev libssl-dev")
-
-main-build: pre-build
+main-build:
+	$(info Building SUPERMAN daemon)
 	@$(MAKE) --no-print-directory $(OUTPUT)
 
 $(OUTPUT): $(OBJS)
@@ -31,5 +31,5 @@ $(OUTPUT): $(OBJS)
 	@$(CC) $(CFLAGS) -c -o $@ $^
 
 clean:
-	-rm -f *.o ../src/*.o *~ $(OUTPUT) core
-
+	$(info Cleaning SUPERMAN daemon)
+	@-rm -f *.o ../src/*.o *~ $(OUTPUT) core

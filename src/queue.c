@@ -100,22 +100,24 @@ static inline int __queue_enqueue_entry(struct superman_packet_info* spi)
  * Find and return a queued entry matched by cmpfn, or return the last
  * entry if cmpfn is NULL.
  */
-static inline struct superman_packet_info* __queue_find_entry(queue_cmpfn cmpfn, unsigned long data)
+static inline struct superman_packet_info* __queue_find_entry(struct net *net, uint32_t ifindex, uint32_t addr)
 {
 	struct list_head *p;
 	list_for_each_prev(p, &queue_list) {
 		struct superman_packet_info *spi = (struct superman_packet_info*)p;
 
-		if (!cmpfn || cmpfn(spi, data))
+		if(
+			(net == NULL && ifindex == 0 && addr == 0) ||
+			(spi->net == net && spi->dev->ifindex == ifindex && addr == spi->queue_addr))
 			return spi;
 	}
 	return NULL;
 }
 
-static inline struct superman_packet_info* __queue_find_dequeue_entry(queue_cmpfn cmpfn, unsigned long data)
+static inline struct superman_packet_info* __queue_find_dequeue_entry(struct net *net, uint32_t ifindex, uint32_t addr)
 {
 	struct superman_packet_info* spi;
-	spi = __queue_find_entry(cmpfn, data);
+	spi = __queue_find_entry(net, ifindex, addr);
 	if (spi == NULL)
 		return NULL;
 	list_del(&spi->list);
@@ -126,7 +128,7 @@ static inline struct superman_packet_info* __queue_find_dequeue_entry(queue_cmpf
 static inline void __queue_flush(void)
 {
 	struct superman_packet_info* spi;
-	while ((spi = __queue_find_dequeue_entry(NULL, 0))) {
+	while ((spi = __queue_find_dequeue_entry(NULL, 0, 0))) {
 		FreeSupermanPacketInfo(spi);
 	}
 }
@@ -136,11 +138,11 @@ static inline void __queue_reset(void)
 	__queue_flush();
 }
 
-static struct superman_packet_info* queue_find_dequeue_entry(queue_cmpfn cmpfn, unsigned long data)
+static struct superman_packet_info* queue_find_dequeue_entry(struct net *net, uint32_t ifindex, uint32_t addr)
 {
 	struct superman_packet_info* spi;
 	write_lock_bh(&queue_lock);
-	spi = __queue_find_dequeue_entry(cmpfn, data);
+	spi = __queue_find_dequeue_entry(net, ifindex, addr);
 	write_unlock_bh(&queue_lock);
 	return spi;
 }
@@ -152,7 +154,7 @@ void FlushQueue(void)
 	write_unlock_bh(&queue_lock);
 }
 
-int EnqueuePacket(struct superman_packet_info* spi, __be32 addr, unsigned int (*callback_after_queue)(struct superman_packet_info*, bool))
+int EnqueuePacket(struct superman_packet_info* spi, uint32_t addr, unsigned int (*callback_after_queue)(struct superman_packet_info*, bool))
 {
 	int status = -EINVAL;
 	spi->queue_addr = addr;
@@ -173,18 +175,13 @@ err_out_unlock:
 	return status;
 }
 
-static inline int addr_cmp(struct superman_packet_info* spi, unsigned long addr)
-{
-	return (addr == spi->queue_addr);
-}
-
-int FindQueuedPacket(__be32 addr)
+int FindQueuedPacket(struct net *net, uint32_t ifindex, uint32_t addr)
 {
 	struct superman_packet_info* spi;
 	int res = 0;
 
 	read_lock_bh(&queue_lock);
-	spi = __queue_find_entry(addr_cmp, addr);
+	spi = __queue_find_entry(net, ifindex, addr);
 	if (spi != NULL)
 		res = 1;
 
@@ -192,7 +189,7 @@ int FindQueuedPacket(__be32 addr)
 	return res;
 }
 
-int SetVerdict(int verdict, __be32 addr)
+int SetVerdict(int verdict, struct net *net, uint32_t ifindex, uint32_t addr)
 {
 	struct superman_packet_info* spi;
 	int pkts = 0;
@@ -200,7 +197,7 @@ int SetVerdict(int verdict, __be32 addr)
 	if (verdict == SUPERMAN_QUEUE_DROP)
 	{
 		while (1) {
-			spi = queue_find_dequeue_entry(addr_cmp, addr);
+			spi = queue_find_dequeue_entry(net, ifindex, addr);
 
 			if (spi == NULL)
 				return pkts;
@@ -220,51 +217,26 @@ int SetVerdict(int verdict, __be32 addr)
 		struct security_table_entry* entry;
 		unsigned int (*callback_after_queue)(struct superman_packet_info*, bool);
 		bool r = false;
-		if (GetSecurityTableEntry(addr, &entry) && entry->flag == SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED)
+		if (GetSecurityTableEntry(net, ifindex, addr, &entry) && entry->flag == SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED)
 			r = true;
 
 		while (1) {
-			spi = queue_find_dequeue_entry(addr_cmp, addr);
+			spi = queue_find_dequeue_entry(net, ifindex, addr);
 
 			if (spi == NULL)
 				return pkts;
 
-				/*
-				typedef struct {
-				  struct work_struct		item;
-				  struct superman_packet_info*	spi;
-					bool result;
-				} send_queued_packet_item;
-				*/
+			// Grab the callback function from the spi->arg and reset the arg.
+			callback_after_queue = (unsigned int (*)(struct superman_packet_info*, bool)) spi->arg;
+			spi->arg = NULL;
 
-			{
-                /*
-				send_queued_packet_item* item = (send_queued_packet_item*)kmalloc(sizeof(send_queued_packet_item), GFP_KERNEL);
-				if(!item)
-				{
-					printk(KERN_ERR "SUPERMAN: Queue - kmalloc failed.\n");
-					return false;
-				}
+			//printk(KERN_INFO "SUPERMAN: queue: \tDequeued superman_packet_info (id: %u)...\n", spi->id);
 
-				INIT_WORK((struct work_struct*)item, send_queued_packet_callback);
-				item->spi = spi;
-				item->result = r;
-				//queue_work(workqueue, (struct work_struct *)item);
-				schedule_work((struct work_struct *)item);
-                */
+			// Refresh our spi to get the security details which we should now have.
+			RefreshSupermanPacketInfo(spi);
 
-                // Grab the callback function from the spi->arg and reset the arg.
-            	callback_after_queue = (unsigned int (*)(struct superman_packet_info*, bool)) spi->arg;
-            	spi->arg = NULL;
-
-                //printk(KERN_INFO "SUPERMAN: queue: \tDequeued superman_packet_info (id: %u)...\n", spi->id);
-
-                // Refresh our spi to get the security details which we should now have.
-                RefreshSupermanPacketInfo(spi);
-
-                // Call the callback to reinject the packet into the processing pipeline where it left off.
-            	callback_after_queue(spi, r);
-			}
+			// Call the callback to reinject the packet into the processing pipeline where it left off.
+			callback_after_queue(spi, r);
 
 			pkts++;
 		}
@@ -274,6 +246,7 @@ int SetVerdict(int verdict, __be32 addr)
 
 int queue_info_proc_show(struct seq_file *m, void *v)
 {
+	struct net *net = get_net_ns_by_pid(task_pid_nr(current));
 	uint32_t countAddrs = 0;
 	uint32_t* addrs;
 	struct list_head *a;
@@ -285,19 +258,22 @@ int queue_info_proc_show(struct seq_file *m, void *v)
 
 	list_for_each(a, &queue_list) {
 		struct superman_packet_info *spi = (struct superman_packet_info*)a;
-		bool found = false;
 
-		for(i = 0; i < countAddrs; i++)
-		{
-			if(spi->queue_addr == addrs[i])
+		if(spi->net == net) {
+			bool found = false;
+
+			for(i = 0; i < countAddrs; i++)
 			{
-				found = true;
-				break;
+				if(spi->queue_addr == addrs[i])
+				{
+					found = true;
+					break;
+				}
 			}
-		}
 
-		if(!found)
-			addrs[countAddrs++] = spi->queue_addr;
+			if(!found)
+				addrs[countAddrs++] = spi->queue_addr;
+		}
 	}
 
 
@@ -313,8 +289,10 @@ int queue_info_proc_show(struct seq_file *m, void *v)
 
 		list_for_each(a, &queue_list) {
 			struct superman_packet_info *spi = (struct superman_packet_info*)a;
-			if(addrs[i] == spi->queue_addr)
-				count++;
+			if(spi->net == net) {
+				if(addrs[i] == spi->queue_addr)
+					count++;
+			}
 		}
 
 		seq_printf(m, "%-20s %u\n", addr, count);

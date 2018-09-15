@@ -9,6 +9,7 @@
 #include <linux/proc_fs.h>
 
 #include "security_table.h"
+#include "security.h"
 
 #define SECURITY_TABLE_MAX_LEN 1024
 
@@ -18,10 +19,10 @@ static LIST_HEAD(security_table_head);
 
 #define list_is_first(e) (&e->l == security_table_head.next)
 
-uint16_t GetNextTimestampFromSecurityTableEntry(uint32_t addr)
+uint16_t GetNextTimestampFromSecurityTableEntry(struct net *net, uint32_t ifindex, uint32_t addr)
 {
 	struct security_table_entry* entry;
-	if(GetSecurityTableEntry(addr, &entry))
+	if(GetSecurityTableEntry(net, ifindex, addr, &entry))
 	{
 		if(entry->timestamp == 0xFFFF) entry->timestamp = 0;
 		entry->timestamp++;
@@ -62,14 +63,14 @@ static inline bool __security_table_add(struct security_table_entry *e)
 	return true;
 }
 
-static inline struct security_table_entry *__security_table_find(uint32_t daddr)
+static inline struct security_table_entry *__security_table_find(struct net *net, uint32_t ifindex, uint32_t daddr)
 {
 	struct list_head *pos;
 
 	list_for_each(pos, &security_table_head) {
 		struct security_table_entry *e = (struct security_table_entry *)pos;
 
-		if (e->daddr == daddr)
+		if (e->net == net && e->ifindex == ifindex && e->daddr == daddr)
 			return e;
 	}
 	return NULL;
@@ -87,13 +88,13 @@ static inline bool __security_table_del(struct security_table_entry *e)
 	return true;
 }
 
-bool RemoveSecurityTableEntry(uint32_t daddr)
+bool RemoveSecurityTableEntry(struct net *net, uint32_t ifindex, uint32_t daddr)
 {
 	struct security_table_entry *e;
 
 	write_lock_bh(&security_table_lock);
 
-	if ((e = __security_table_find(daddr)) && __security_table_del(e))
+	if ((e = __security_table_find(net, ifindex, daddr)) && __security_table_del(e))
 	{
 		if(e->sk)
 			kfree(e->sk);
@@ -113,23 +114,23 @@ bool RemoveSecurityTableEntry(uint32_t daddr)
 	return false;
 }
 
-bool HasSecurityTableEntry(uint32_t daddr)
+bool HasSecurityTableEntry(struct net *net, uint32_t ifindex, uint32_t daddr)
 {
 	struct security_table_entry* entry;
 	read_lock_bh(&security_table_lock);
-	entry = __security_table_find(daddr);
+	entry = __security_table_find(net, ifindex, daddr);
 	read_unlock_bh(&security_table_lock);
 	return entry != NULL;
 }
 
-bool GetSecurityTableEntry(uint32_t daddr, struct security_table_entry** entry)
+bool GetSecurityTableEntry(struct net *net, uint32_t ifindex, uint32_t daddr, struct security_table_entry** entry)
 {
 	if(!entry) return false;
 
 	//printk(KERN_INFO "SUPERMAN: Security_Table - GetSecurityTableEntry - %u.%u.%u.%u\n", 0x0ff & daddr, 0x0ff & (daddr >> 8), 0x0ff & (daddr >> 16), 0x0ff & (daddr >> 24));
 
 	read_lock_bh(&security_table_lock);
-	*entry = __security_table_find(daddr);
+	*entry = __security_table_find(net, ifindex, daddr);
 	read_unlock_bh(&security_table_lock);
 
 	if (*entry) {
@@ -139,12 +140,12 @@ bool GetSecurityTableEntry(uint32_t daddr, struct security_table_entry** entry)
 	//printk(KERN_INFO "SUPERMAN: Security_Table - GetSecurityTableEntry - no entry, creating...");
 
 	// If the entry doesn't exist, add it.
-	if(!AddSecurityTableEntry(daddr, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, NULL, 0, NULL, 0, NULL, -1, NULL, -1)) {
+	if(!AddSecurityTableEntry(net, ifindex, daddr, SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE, 0, NULL, 0, NULL, 0, NULL, -1)) {
 		return false;
 	}
 	else {
 			read_lock_bh(&security_table_lock);
-			*entry = __security_table_find(daddr);
+			*entry = __security_table_find(net, ifindex, daddr);
 			read_unlock_bh(&security_table_lock);
 	}
 
@@ -159,21 +160,18 @@ bool GetSecurityTableEntry(uint32_t daddr, struct security_table_entry** entry)
 	return false;
 }
 
-bool UpdateSecurityTableEntry(struct security_table_entry *e, uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, struct net* net, int32_t ifindex)
+bool UpdateSecurityTableEntry(struct security_table_entry *e, struct net *net, uint32_t ifindex, uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp)
 {
 	// printk(KERN_INFO "Security_Table:\tUpdateSecurityTableEntry - clearing security table entry.\n");
 	ClearSecurityTableEntry(e);
 
 	// printk(KERN_INFO "Security_Table:\tUpdateSecurityTableEntry - updating security table entry...\n");
-
+	e->net = net;
+	e->ifindex = ifindex;
 	e->daddr = daddr;
 	e->flag = flag;
 	if(timestamp != -1)
 		e->timestamp = timestamp;
-	if(net != NULL)
-		e->net = net;
-	if(ifindex != -1)
-		e->ifindex = ifindex;
 
 	// printk(KERN_INFO "Security_Table:\tUpdateSecurityTableEntry - sk_len: %d, ske_len: %d, skp_len: %d\n", sk_len, ske_len, skp_len);
 	if(
@@ -218,22 +216,22 @@ void ClearSecurityTableEntry(struct security_table_entry *e)
 	}
 }
 
-bool UpdateSecurityTableEntryFlag(uint32_t daddr, uint8_t flag, uint32_t timestamp, struct net *net, uint32_t ifindex)
+bool UpdateSecurityTableEntryFlag(struct net *net, uint32_t ifindex, uint32_t daddr, uint8_t flag, uint32_t timestamp)
 {
 	struct security_table_entry *e;
 
-	if(GetSecurityTableEntry(daddr, &e))
+	if(GetSecurityTableEntry(net, ifindex, daddr, &e))
 	{
 		e->flag = flag;
 		return true;
 	}
 	else
 	{
-		return UpdateOrAddSecurityTableEntry(daddr, flag, 0, NULL, 0, NULL, 0, NULL, timestamp, net, ifindex);
+		return UpdateOrAddSecurityTableEntry(net, ifindex, daddr, flag, 0, NULL, 0, NULL, 0, NULL, timestamp);
 	}
 }
 
-bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, struct net *net, int32_t ifindex)
+bool AddSecurityTableEntry(struct net *net, uint32_t ifindex, uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp)
 {
 	struct security_table_entry *e;
 	bool r = false;
@@ -245,6 +243,8 @@ bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsign
 		printk(KERN_ERR "security_table: \t\t\t\"Out Of Memory\" in UpdateOrAddSecurityTableEntry\n");
 		return false;
 	}
+	e->net = NULL;
+	e->ifindex = 0;
 	e->daddr = 0;
 	e->flag = SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE;
 	e->sk_len = 0;
@@ -254,12 +254,10 @@ bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsign
 	e->skp_len = 0;
 	e->skp = NULL;
 	e->timestamp = 0;
-	e->net = NULL;
-	e->ifindex = 0;
 
-	if(!UpdateSecurityTableEntry(e, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, net, ifindex))
+	if(!UpdateSecurityTableEntry(e, net, ifindex, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp))
 	{
-		RemoveSecurityTableEntry(daddr);
+		RemoveSecurityTableEntry(net, ifindex, daddr);
 		printk(KERN_ERR "SUPERMAN: security_table - \t\t\t\"Out Of Memory\" in UpdateOrAddSecurityTableEntry\n");
 		return false;
 	}
@@ -281,20 +279,20 @@ bool AddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsign
 	return r;
 }
 
-bool UpdateOrAddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp, struct net *net, int32_t ifindex)
+bool UpdateOrAddSecurityTableEntry(struct net *net, uint32_t ifindex, uint32_t daddr, uint8_t flag, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, int32_t timestamp)
 {
 	struct security_table_entry *e;
 
 	//printk(KERN_INFO "SUPERMAN: Security_Table - UpdateOrAddSecurityTableEntry - %u.%u.%u.%u, flag = %d.\n", 0x0ff & daddr, 0x0ff & (daddr >> 8), 0x0ff & (daddr >> 16), 0x0ff & (daddr >> 24), flag);
 
-	if(GetSecurityTableEntry(daddr, &e))
+	if(GetSecurityTableEntry(net, ifindex, daddr, &e))
 	{
 		// printk(KERN_INFO "Security_Table:\tUpdateOrAddSecurityTableEntry - updating existing entry.\n");
 
 		// printk(KERN_ERR "SUPERMAN: security_table - \t\tUpdating an existing entry...\n");
-		if(!UpdateSecurityTableEntry(e, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, net, ifindex))
+		if(!UpdateSecurityTableEntry(e, net, ifindex, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp))
 		{
-			RemoveSecurityTableEntry(daddr);
+			RemoveSecurityTableEntry(net, ifindex, daddr);
 			printk(KERN_ERR "SUPERMAN: security_table - \t\t\t\"Out Of Memory\" in UpdateOrAddSecurityTableEntry\n");
 			return false;
 		}
@@ -306,25 +304,78 @@ bool UpdateOrAddSecurityTableEntry(uint32_t daddr, uint8_t flag, uint32_t sk_len
 	}
 	else
 	{
-		return AddSecurityTableEntry(daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp, net, ifindex);
+		return AddSecurityTableEntry(net, ifindex, daddr, flag, sk_len, sk, ske_len, ske, skp_len, skp, timestamp);
 	}
+}
+
+
+
+bool UpdateBroadcastKey(struct net *net, uint32_t ifindex, uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, bool overwrite)
+{
+	struct security_table_entry* entry;
+	uint8_t flag = 0;
+
+	// If we already have a valid entry and we're not being asked to overwrite it.
+	if(!overwrite && GetSecurityTableEntry(net, ifindex, INADDR_BROADCAST, &entry) && entry->flag >= SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED)
+	{
+		//printk(KERN_INFO "Security:\tUpdateBroadcastKey - not overwriting, entry exists.\n");
+		return true;
+	}
+
+	// Determine whether we have an sk.
+	if(sk_len > 0 && sk != NULL)
+	{
+		// printk(KERN_INFO "Security:\tUpdateBroadcastKey - sk provided.\n");
+
+		// Do we also have ske and skp?
+		if(ske_len > 0 && skp_len > 0 && ske != NULL && skp != NULL)
+		{
+			flag = SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED;
+			// printk(KERN_INFO "Security:\tUpdateBroadcastKey - ske and skp provided.\n");
+		}
+		else
+		{
+			flag = SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED;
+			// printk(KERN_INFO "Security:\tUpdateBroadcastKey - ske and skp not provided.\n");
+		}
+	}
+	else
+	{
+		flag = SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE;
+		// printk(KERN_INFO "Security:\tUpdateBroadcastKey - sk not provided.\n");
+	}
+
+	// printk(KERN_INFO "Security:\tUpdateBroadcastKey - requesting to update the security table entry.\n");
+	return UpdateOrAddSecurityTableEntry(net, ifindex, INADDR_BROADCAST, flag, sk_len, sk, ske_len, ske, skp_len, skp, 0);
+}
+
+bool GetBroadcastKey(struct net *net, uint32_t ifindex, uint32_t* sk_len, unsigned char** sk)
+{
+	struct security_table_entry* entry;
+	if(!GetSecurityTableEntry(net, ifindex, INADDR_BROADCAST, &entry))
+		return false;
+	*sk_len = entry->sk_len;
+	*sk = entry->sk;
+	return true;
 }
 
 int security_table_info_proc_show(struct seq_file *m, void *v)
 {
+	struct net *net = get_net_ns_by_pid(task_pid_nr(current));
 	struct list_head *pos;
 
 	read_lock_bh(&security_table_lock);
 
-	seq_printf(m, "# Total entries: %u\n", security_table_len);
 	seq_printf(m, "%-15s %-6s %-16s %-16s %-16s\n", "Addr", "Flag", "SK Len (bits)", "SKE Len (bits)", "SKP Len (bits)");
 
 	list_for_each(pos, &security_table_head) {
-		char addr[16];
 		struct security_table_entry *e = (struct security_table_entry *)pos;
-
-		sprintf(addr, "%u.%u.%u.%u", (0x0ff & e->daddr), (0x0ff & (e->daddr >> 8)), (0x0ff & (e->daddr >> 16)), (0x0ff & (e->daddr >> 24)));
-		seq_printf(m, "%-15s %-6d %-16d %-16d %-16d\n", addr, e->flag, (e->sk_len * 8), (e->ske_len * 8), (e->skp_len * 8));
+		if(e->net == net)
+		{
+			char addr[16];
+			sprintf(addr, "%u.%u.%u.%u", (0x0ff & e->daddr), (0x0ff & (e->daddr >> 8)), (0x0ff & (e->daddr >> 16)), (0x0ff & (e->daddr >> 24)));
+			seq_printf(m, "%-15s %-6d %-16d %-16d %-16d\n", addr, e->flag, (e->sk_len * 8), (e->ske_len * 8), (e->skp_len * 8));
+		}
 	}
 
 	read_unlock_bh(&security_table_lock);
@@ -339,14 +390,57 @@ void FlushSecurityTable(void)
 	write_unlock_bh(&security_table_lock);
 }
 
+static int __net_init NetInitHook(struct net* net)
+{
+	// Add a broadcast key
+	struct net_device *dev;
+	for_each_netdev(net, dev)
+		UpdateBroadcastKey(net, dev->ifindex, 0, NULL, 0, NULL, 0, NULL, true);
+
+	return 0;
+}
+
+static void __net_exit NetDeInitHook(struct net* net)
+{
+	// Remove all security table entries related to the deinitialising network namespace.
+	struct list_head *pos, *tmp;
+
+	write_lock_bh(&security_table_lock);
+
+	list_for_each_safe(pos, tmp, &security_table_head) {
+		struct security_table_entry *e = (struct security_table_entry *)pos;
+		if(e->net == net)
+		{
+			list_del(&e->l);
+			security_table_len--;
+		}
+		kfree(e);
+	}
+
+	write_unlock_bh(&security_table_lock);
+}
+
+static struct pernet_operations __net_initdata superman_securitytable_net_ops = {
+       .init = &NetInitHook,
+       .exit = &NetDeInitHook,
+};
+
 bool InitSecurityTable(void)
 {
+	struct net *net;
+
 	security_table_len = 0;
+	register_pernet_subsys(&superman_securitytable_net_ops);
+
+	for_each_net(net)
+		NetInitHook(net);
+
 	return true;
 }
 
 void DeInitSecurityTable(void)
 {
+	unregister_pernet_subsys(&superman_securitytable_net_ops);
 	FlushSecurityTable();
 }
 

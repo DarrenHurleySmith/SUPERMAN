@@ -75,55 +75,6 @@ static inline struct scatterlist *req_sg(struct crypto_aead *aead, struct aead_r
 	return (void *)ALIGN((unsigned long)(req + 1) + crypto_aead_reqsize(aead), __alignof__(struct scatterlist));
 }
 
-bool UpdateBroadcastKey(uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp, bool overwrite)
-{
-	struct security_table_entry* entry;
-	uint8_t flag = 0;
-
-	// If we already have a valid entry and we're not being asked to overwrite it.
-	if(!overwrite && GetSecurityTableEntry(INADDR_BROADCAST, &entry) && entry->flag >= SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED)
-	{
-		//printk(KERN_INFO "Security:\tUpdateBroadcastKey - not overwriting, entry exists.\n");
-		return true;
-	}
-
-	// Determine whether we have an sk.
-	if(sk_len > 0 && sk != NULL)
-	{
-		// printk(KERN_INFO "Security:\tUpdateBroadcastKey - sk provided.\n");
-
-		// Do we also have ske and skp?
-		if(ske_len > 0 && skp_len > 0 && ske != NULL && skp != NULL)
-		{
-			flag = SUPERMAN_SECURITYTABLE_FLAG_SEC_VERIFIED;
-			// printk(KERN_INFO "Security:\tUpdateBroadcastKey - ske and skp provided.\n");
-		}
-		else
-		{
-			flag = SUPERMAN_SECURITYTABLE_FLAG_SEC_UNVERIFIED;
-			// printk(KERN_INFO "Security:\tUpdateBroadcastKey - ske and skp not provided.\n");
-		}
-	}
-	else
-	{
-		flag = SUPERMAN_SECURITYTABLE_FLAG_SEC_NONE;
-		// printk(KERN_INFO "Security:\tUpdateBroadcastKey - sk not provided.\n");
-	}
-
-	// printk(KERN_INFO "Security:\tUpdateBroadcastKey - requesting to update the security table entry.\n");
-	return UpdateOrAddSecurityTableEntry(INADDR_BROADCAST, flag, sk_len, sk, ske_len, ske, skp_len, skp, 0, NULL, 0);
-}
-
-bool GetBroadcastKey(uint32_t* sk_len, unsigned char** sk)
-{
-	struct security_table_entry* entry;
-	if(!GetSecurityTableEntry(INADDR_BROADCAST, &entry))
-		return false;
-	*sk_len = entry->sk_len;
-	*sk = entry->sk;
-	return true;
-}
-
 void dump_packet(struct sk_buff* skb)
 {
 	int nfrags;
@@ -1032,8 +983,6 @@ unsigned int RemoveP2PSecurity(struct superman_packet_info* spi, unsigned int (*
 
 bool InitSecurity(void)
 {
-	UpdateBroadcastKey(0, NULL, 0, NULL, 0, NULL, true);
-
 	aead = crypto_alloc_aead(AEAD_ALG_NAME, 0, 0);
 	if(IS_ERR(aead))
 	{
@@ -1095,22 +1044,236 @@ void DeInitSecurity(void)
 #include "security.h"
 #include "netlink.h"
 
-uint32_t	ca_cert_data_len		= 0;
-unsigned char*	ca_cert_data			= NULL;
-uint32_t	node_cert_data_len		= 0;
-unsigned char*	node_cert_data			= NULL;
-uint32_t	node_dh_privatekey_data_len	= 0;
-unsigned char*	node_dh_privatekey_data		= NULL;
+struct certificate {
+	uint32_t	cert_data_len;
+	unsigned char*	cert_data;
+	BIO*		cert_bio;
+	X509_STORE*	cert_store;
+	X509*		cert;
+};
+
+struct node {
+	uint32_t		netns_id;
+	uint32_t		ifindex;
+	uint32_t		interface_name_len;
+	unsigned char*		interface_name;
+
+	struct certificate	certificate;
+	uint32_t		privatekey_data_len;
+	unsigned char*		privatekey_data;
+	BIO*			privatekey_bio;
+	EVP_PKEY*		privatekey;
+	DH*			privatekey_dh;
+	BIGNUM*			publickey;
+};
+
+
+#define NODES_INIT_CAPACITY 4
+
+struct nodes {
+	struct node** items;
+	int capacity;
+	int total;
+};
+
+struct vault {
+	struct certificate	certificate_authority;
+	struct nodes		nodes;
+};
+
+void certificate_init(struct certificate* c)
+{
+	c->cert			= NULL;
+	c->cert_bio		= NULL;
+	c->cert_data		= NULL;
+	c->cert_data_len	= 0;
+	c->cert_store		= NULL;
+}
+
+void nodes_init(struct vault *v)
+{
+	v->nodes.capacity	= NODES_INIT_CAPACITY;
+	v->nodes.total		= 0;
+	v->nodes.items		= malloc(sizeof(struct node*) * v->nodes.capacity);
+}
+
+void node_init(struct node *n)
+{
+	certificate_init(&(n->certificate));
+	
+	n->netns_id		= 0;
+	n->ifindex		= 0;
+	n->interface_name_len	= 0;
+	n->interface_name	= NULL;
+	n->privatekey_data_len	= 0;
+	n->privatekey_data	= NULL;
+	n->privatekey_bio	= NULL;
+	n->privatekey		= NULL;
+	n->privatekey_dh	= NULL;
+	n->publickey		= NULL;
+}
+
+struct node* node_create()
+{
+	struct node *node = (struct node*)malloc(sizeof(struct node));
+	node_init(node);
+	return node;
+}
+
+void certificate_free(struct certificate* c)
+{
+	if(c->cert_store)
+	{
+		X509_STORE_free(c->cert_store);
+		c->cert_store = NULL;
+	}
+	if(c->cert)
+	{
+		X509_free(c->cert);
+		c->cert = NULL;
+	}
+	if(c->cert_bio)
+	{
+		BIO_free_all(c->cert_bio);
+		c->cert_bio = NULL;
+	}
+	if(c->cert_data)
+	{
+		free(c->cert_data);
+		c->cert_data = NULL;
+		c->cert_data_len = 0;
+	}
+}
+
+void node_free(struct node* node)
+{
+	certificate_free(&(node->certificate));
+	node->privatekey_dh = NULL;
+	if(node->privatekey_data)
+	{
+		free(node->privatekey_data);
+		node->privatekey_data = NULL;
+		node->privatekey_data_len = 0;
+	}
+	if(node->privatekey_bio)
+	{
+		BIO_free_all(node->privatekey_bio);
+		node->privatekey_bio = NULL;
+	}
+	if(node->privatekey)
+	{
+		EVP_PKEY_free(node->privatekey);
+		node->privatekey = NULL;
+	}
+	if(node->publickey)
+	{
+		BN_free(node->publickey);
+		node->publickey = NULL;
+	}
+}
+
+void node_delete(struct node* node)
+{
+	node_free(node);
+	free(node);
+}
+
+int nodes_total(struct nodes *v)
+{
+	return v->total;
+}
+
+static void nodes_resize(struct vault *v, int capacity)
+{
+	struct node** items = realloc(v->nodes.items, sizeof(struct node*) * capacity);
+	if (items) {
+		v->nodes.items = items;
+		v->nodes.capacity = capacity;
+	}
+}
+
+void nodes_add(struct vault *v, struct node *item)
+{
+	if (v->nodes.capacity == v->nodes.total)
+		nodes_resize(v, v->nodes.capacity * 2);
+	v->nodes.items[v->nodes.total++] = item;
+}
+
+struct node* nodes_get(struct vault *v, int index)
+{
+	if (index >= 0 && index < v->nodes.total)
+		return v->nodes.items[index];
+	return NULL;
+}
+
+struct node* nodes_find(struct vault *v, uint32_t netns_id, uint32_t ifindex)
+{
+    for (int i = 0; i < v->nodes.total - 1; i++) {
+	    if(v->nodes.items[i]->netns_id == netns_id && v->nodes.items[i]->ifindex == ifindex)
+	    	return v->nodes.items[i];
+    }
+    return NULL;
+}
+
+void nodes_delete(struct vault *v, int index)
+{
+	if (index < 0 || index >= v->nodes.total)
+		return;
+
+	v->nodes.items[index] = NULL;
+
+	for (int i = index; i < v->nodes.total - 1; i++) {
+		v->nodes.items[i] = v->nodes.items[i + 1];
+		v->nodes.items[i + 1] = NULL;
+	}
+
+	v->nodes.total--;
+
+	if (v->nodes.total > 0 && v->nodes.total == v->nodes.capacity / 4)
+		nodes_resize(v, v->nodes.capacity / 2);
+}
+
+void nodes_free(struct vault *v)
+{
+    for (int i = 0; i < v->nodes.total - 1; i++) {
+	struct node* node = v->nodes.items[i];
+	node_delete(node);
+	v->nodes.items[i] = NULL;
+    }
+    free(v->nodes.items);
+}
+
+struct vault	vault;
+
+void vault_init(struct vault* v)
+{
+	certificate_init(&(v->certificate_authority));
+	nodes_init(v);
+}
+
+void vault_free(struct vault* v)
+{
+	certificate_free(&(v->certificate_authority));
+	nodes_free(v);
+}
+
+
+// uint32_t	ca_cert_data_len		= 0;
+// unsigned char*	ca_cert_data			= NULL;
+// uint32_t	node_cert_data_len		= 0;
+// unsigned char*	node_cert_data			= NULL;
+// uint32_t	node_dh_privatekey_data_len	= 0;
+// unsigned char*	node_dh_privatekey_data		= NULL;
 
 BIO*		outbio				= NULL;
-BIO*		ca_certbio			= NULL;
-X509*		ca_cert				= NULL;
-X509_STORE*	ca_store			= NULL;
+// BIO*		ca_certbio			= NULL;
+// X509*		ca_cert				= NULL;
+// X509_STORE*	ca_store			= NULL;
 
-BIO*		node_privatekeybio		= NULL;
-EVP_PKEY*	node_privatekey			= NULL;
-DH*		node_privatekey_dh		= NULL;
-BIGNUM*		node_publickey			= NULL;
+// BIO*		node_privatekeybio		= NULL;
+// EVP_PKEY*	node_privatekey			= NULL;
+// DH*		node_privatekey_dh		= NULL;
+// BIGNUM*		node_publickey			= NULL;
 
 void DumpKeys(uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned char* ske, uint32_t skp_len, unsigned char* skp)
 {
@@ -1122,18 +1285,20 @@ void DumpKeys(uint32_t sk_len, unsigned char* sk, uint32_t ske_len, unsigned cha
 	BIO_dump(outbio, skp, skp_len);
 }
 
-bool MallocAndCopyPublickey(uint32_t* sk_len, unsigned char** sk)
+bool MallocAndCopyPublickey(uint32_t netns_id, uint32_t ifindex, uint32_t* sk_len, unsigned char** sk)
 {
+	struct node *node = nodes_find(&vault, netns_id, ifindex);
 	*sk_len = 0;
 	*sk = NULL;
 
 	if(
-		(node_publickey) &&
-		((*sk_len = BN_num_bytes(node_publickey)) > 0) &&
+		(node) &&
+		(node->publickey) &&
+		((*sk_len = BN_num_bytes(node->publickey)) > 0) &&
 		(*sk = malloc(*sk_len))
 	)
 	{
-		BN_bn2bin(node_publickey, *sk);
+		BN_bn2bin(node->publickey, *sk);
 		return true;
 	}
 
@@ -1141,19 +1306,21 @@ bool MallocAndCopyPublickey(uint32_t* sk_len, unsigned char** sk)
 	return false;
 }
 
-bool MallocAndCopyCertificate(uint32_t* certificate_len, unsigned char** certificate)
+bool MallocAndCopyCertificate(uint32_t netns_id, uint32_t ifindex, uint32_t* certificate_len, unsigned char** certificate)
 {
+	struct node *node = nodes_find(&vault, netns_id, ifindex);
 	*certificate_len = 0;
 	*certificate = NULL;
 
 	if(
-		(node_cert_data) &&
-		(node_cert_data_len > 0) &&
-		(*certificate = (unsigned char*) malloc(node_cert_data_len))
+		(node) &&
+		(node->certificate.cert_data) &&
+		(node->certificate.cert_data_len > 0) &&
+		(*certificate = (unsigned char*) malloc(node->certificate.cert_data_len))
 	)
 	{
-		*certificate_len = node_cert_data_len;
-		memcpy(*certificate, node_cert_data, node_cert_data_len);
+		*certificate_len = node->certificate.cert_data_len;
+		memcpy(*certificate, node->certificate.cert_data, node->certificate.cert_data_len);
 		return true;
 	}
 
@@ -1285,9 +1452,13 @@ BIGNUM* GetNodeShare(uint32_t cert_data_len, unsigned char* cert_data)
 {
 	// Load our public key from the certificate
 	// lprintf("Security: Extracting DH public key from certificate...\n");
-	BIO*		certbio		= NULL;
-	X509*		cert		= NULL;
-	if(!LoadCertificate(cert_data_len, cert_data, &certbio, &cert))
+	struct certificate cert;
+	cert.cert_data_len = cert_data_len;
+	cert.cert_data = cert_data;
+
+	// BIO*		certbio		= NULL;
+	// X509*		cert		= NULL;
+	if(!LoadCertificate(cert.cert_data_len, cert.cert_data, &(cert.cert_bio), &(cert.cert)))
 	{
 		return NULL;
 	}
@@ -1295,10 +1466,10 @@ BIGNUM* GetNodeShare(uint32_t cert_data_len, unsigned char* cert_data)
 	EVP_PKEY*	pkey		= NULL;
 
 	// Extract the certificate's public key data.
-	if ((pkey = X509_get_pubkey(cert)) == NULL)
+	if ((pkey = X509_get_pubkey(cert.cert)) == NULL)
 	{
 		BIO_printf(outbio, "Security: Error getting public key from certificate");
-		FreeCertificate(&certbio, &cert);
+		FreeCertificate(&(cert.cert_bio), &(cert.cert));
 		return NULL;
 	}
 
@@ -1307,7 +1478,7 @@ BIGNUM* GetNodeShare(uint32_t cert_data_len, unsigned char* cert_data)
 	if(!CheckKey(pkey))
 	{
 		EVP_PKEY_free(pkey);
-		FreeCertificate(&certbio, &cert);
+		FreeCertificate(&(cert.cert_bio), &(cert.cert));
 		return NULL;
 	}
 
@@ -1316,11 +1487,84 @@ BIGNUM* GetNodeShare(uint32_t cert_data_len, unsigned char* cert_data)
 	DH_get0_key(dh, &pubkey, NULL);
 	BIGNUM* n = BN_dup(pubkey);
 	EVP_PKEY_free(pkey);
-	FreeCertificate(&certbio, &cert);
+	FreeCertificate(&(cert.cert_bio), &(cert.cert));
 	return n;
 }
 
-bool VerifyCertificate(uint32_t cert_data_len, unsigned char* cert_data, unsigned char* node_share, int node_share_len)
+bool LoadNodeCertificates(uint32_t netns_id, uint32_t ifindex, unsigned char* node_cert_filename, unsigned char* node_dh_privatekey_filename)
+{
+	struct node *node = node_create();
+
+	// lprintf("Security: Reading certificate data...\n");
+	if(
+		(!(LoadFile(node_cert_filename, &(node->certificate.cert_data_len), &(node->certificate.cert_data)))) ||
+		(!(LoadFile(node_dh_privatekey_filename, &(node->privatekey_data_len), &(node->privatekey_data))))
+	)
+	{
+		BIO_printf(outbio, "Security: Failed to load the node certificate files.\n");
+		node_delete(node);
+		return false;
+	}
+
+	// lprintf("Security: Verifying our node certificate...\n");
+	if(!VerifyCertificate(-1, -1, node->certificate.cert_data_len, node->certificate.cert_data, NULL, 0))
+	{
+		BIO_printf(outbio, "Security: Error verifying certificate.\n");
+		node_delete(node);
+		return false;
+	}
+
+	// Load up our private key.
+	// lprintf("Security: Loading DH private key...\n");
+	node->privatekey_bio = BIO_new_mem_buf((void*)node->privatekey_data, -1);
+	if(!(node->privatekey = PEM_read_bio_PrivateKey(node->privatekey_bio, NULL, NULL, NULL)))
+	{
+		BIO_printf(outbio, "Security: Error loading node private key.\n");
+		node_delete(node);
+		return false;
+	}
+
+	// Do some checks on the private key
+	if(!CheckKey(node->privatekey))
+	{
+		BIO_printf(outbio, "Security: The nodes private key failed the check.\n");
+		node_delete(node);
+		return false;
+	}
+	else
+	{
+		node->privatekey_dh = EVP_PKEY_get1_DH(node->privatekey);
+	}
+
+	// Load our public key from the certificate
+	if(!(node->publickey = GetNodeShare(node->certificate.cert_data_len, node->certificate.cert_data)))
+	{
+		BIO_printf(outbio, "Security: Failed to load the public key from the node certificate.\n");
+		node_delete(node);
+		return false;
+	}
+
+	// lprintf("Security: Comparing the node private key with the node certificate...\n");
+	const BIGNUM* pubkey;
+	DH_get0_key(node->privatekey_dh, &pubkey, NULL);
+	if(BN_cmp(pubkey, node->publickey) != 0)
+	{
+		BIO_printf(outbio, "Security: The nodes private key doesn't match the node certificate provided.\n");
+		node_delete(node);
+		return false;
+	}
+	else
+	{
+		// lprintf("Security: ...key match.\n");
+	}
+
+	node->netns_id = netns_id;
+	node->ifindex = ifindex;
+	nodes_add(&vault, node);
+	return true;
+}
+
+bool VerifyCertificate(uint32_t netns_id, uint32_t ifindex, uint32_t cert_data_len, unsigned char* cert_data, unsigned char* node_share, int node_share_len)
 {
 	//X509          	*error_cert	= NULL;
 	BIO             *certbio	= NULL;
@@ -1341,7 +1585,7 @@ bool VerifyCertificate(uint32_t cert_data_len, unsigned char* cert_data, unsigne
 	// Initialize the ctx structure for a verification operation:
 	// Set the trusted cert store, the unvalidated cert, and any
 	// potential certs that could be needed (here we set it NULL)
-	X509_STORE_CTX_init(vrfy_ctx, ca_store, cert, NULL);
+	X509_STORE_CTX_init(vrfy_ctx, vault.certificate_authority.cert_store, cert, NULL);
 
 	// Check the complete cert chain can be build and validated.
 	// Returns 1 on success, 0 on verification failures, and -1
@@ -1375,20 +1619,29 @@ bool VerifyCertificate(uint32_t cert_data_len, unsigned char* cert_data, unsigne
 		// Now check the node_share provided matches the certificate.
 		if(node_share != NULL)
 		{
-			BIGNUM* shareProvided = BN_mpi2bn(node_share, node_share_len, NULL);
-			BIGNUM* shareDerived = GetNodeShare(cert_data_len, cert_data);
-			const BIGNUM* pubkey;
-			DH_get0_key(node_privatekey_dh, &pubkey, NULL);
-			ret = (BN_cmp(pubkey, node_publickey));
-			BN_free(shareProvided);
-			BN_free(shareDerived);
-
-			if(ret == 0)
-				ret = 1;
+			struct node* node = nodes_find(&vault, netns_id, ifindex);
+			if(!node)
+			{
+				BIO_printf(outbio, "Security: Node certificate not loaded.");
+				ret = 0;
+			}
 			else
 			{
-				BIO_printf(outbio, "Security: Certificate / node share doesn't match.");
-				ret = 0;
+				BIGNUM* shareProvided = BN_mpi2bn(node_share, node_share_len, NULL);
+				BIGNUM* shareDerived = GetNodeShare(cert_data_len, cert_data);
+				const BIGNUM* pubkey;
+				DH_get0_key(node->privatekey_dh, &pubkey, NULL);
+				ret = (BN_cmp(pubkey, node->publickey));
+				BN_free(shareProvided);
+				BN_free(shareDerived);
+
+				if(ret == 0)
+					ret = 1;
+				else
+				{
+					BIO_printf(outbio, "Security: Certificate / node share doesn't match.");
+					ret = 0;
+				}
 			}
 		}
 	}
@@ -1447,9 +1700,13 @@ bool MallocAndGenerateSharedkeys(uint32_t sk_len, unsigned char* sk, uint32_t* s
 	return true;
 }
 
-bool MallocAndDHAndGenerateSharedkeys(uint32_t sk_len, unsigned char* sk, uint32_t* ske_len, unsigned char** ske, uint32_t* skp_len, unsigned char** skp)
+bool MallocAndDHAndGenerateSharedkeys(uint32_t netns_id, uint32_t ifindex, uint32_t sk_len, unsigned char* sk, uint32_t* ske_len, unsigned char** ske, uint32_t* skp_len, unsigned char** skp)
 {
-	uint32_t cmb_len = DH_size(node_privatekey_dh);
+	struct node *node = nodes_find(&vault, netns_id, ifindex);
+	if(!node)
+		return false;
+	
+	uint32_t cmb_len = DH_size(node->privatekey_dh);
 	unsigned char* cmb = NULL;
 	BIGNUM* sk_bn = NULL;
 	bool result;
@@ -1472,7 +1729,7 @@ bool MallocAndDHAndGenerateSharedkeys(uint32_t sk_len, unsigned char* sk, uint32
 	}
 
 	// lprintf("Security: \tComputing the DH shared key...\n");
-	cmb_len = DH_compute_key(cmb, sk_bn, node_privatekey_dh);
+	cmb_len = DH_compute_key(cmb, sk_bn, node->privatekey_dh);
 	if(0 > cmb_len)
 	{
 		lprintf("Security: \tFailed to compute the shared key.\n");
@@ -1490,20 +1747,24 @@ bool MallocAndDHAndGenerateSharedkeys(uint32_t sk_len, unsigned char* sk, uint32
 	return result;
 }
 
-unsigned char* GenerateSharedSecret(uint32_t cert_data_len, unsigned char* cert_data)
+unsigned char* GenerateSharedSecret(uint32_t netns_id, uint32_t ifindex, uint32_t cert_data_len, unsigned char* cert_data)
 {
+	struct node *node = nodes_find(&vault, netns_id, ifindex);
+	if(!node)
+		return NULL;
+
 	BIGNUM* pubkey = GetNodeShare(cert_data_len, cert_data);
 	if(!pubkey) return NULL;
 
 	unsigned char *secret;
-	if(!(secret = OPENSSL_malloc(sizeof(unsigned char) * (DH_size(node_privatekey_dh)))))
+	if(!(secret = OPENSSL_malloc(sizeof(unsigned char) * (DH_size(node->privatekey_dh)))))
 	{
 		BN_free(pubkey);
 		return NULL;
 	}
 
 	int secret_size;
-	if(0 > (secret_size = DH_compute_key(secret, pubkey, node_privatekey_dh)))
+	if(0 > (secret_size = DH_compute_key(secret, pubkey, node->privatekey_dh)))
 	{
 		BN_free(pubkey);
 		OPENSSL_free(secret);
@@ -1542,32 +1803,31 @@ bool TestCertificate(unsigned char* cert_filename)
 	if(LoadFile(cert_filename, &cert_data_len, &cert_data))
 	{
 		// Can we verify the certificate?
-		if(VerifyCertificate(cert_data_len, cert_data, NULL, 0))
+		if(VerifyCertificate(-1, -1, cert_data_len, cert_data, NULL, 0))
 		{
-			unsigned char* sharedSecret = GenerateSharedSecret(cert_data_len, cert_data);
-
-			OPENSSL_free(sharedSecret);
+			// unsigned char* sharedSecret = GenerateSharedSecret(cert_data_len, cert_data);
+			// OPENSSL_free(sharedSecret);
 		}
 
 		free(cert_data);
 	}
 }
 
-bool InitSecurity(unsigned char* ca_cert_filename, unsigned char* node_cert_filename, unsigned char* node_dh_privatekey_filename)
+bool InitSecurity(unsigned char* ca_cert_filename)
 {
+	vault_init(&vault);
+
 	// lprintf("Security: Reading certificate data...\n");
 	if(
-		(!(LoadFile(ca_cert_filename, &ca_cert_data_len, &ca_cert_data))) ||
-		(!(LoadFile(node_cert_filename, &node_cert_data_len, &node_cert_data))) ||
-		(!(LoadFile(node_dh_privatekey_filename, &node_dh_privatekey_data_len, &node_dh_privatekey_data)))
+		!(LoadFile(ca_cert_filename, &(vault.certificate_authority.cert_data_len), &(vault.certificate_authority.cert_data)))
 	)
 	{
 		DeInitSecurity();
+		
 		return false;
 	}
 
 	// lprintf("Security: Initialising OpenSSL...\n");
-
 	OpenSSL_add_all_algorithms();
 	ERR_load_BIO_strings();
 	ERR_load_crypto_strings();
@@ -1580,14 +1840,14 @@ bool InitSecurity(unsigned char* ca_cert_filename, unsigned char* node_cert_file
 	// lprintf("Security: Loading the CA public certificate...\n");
 
 	// Load the up root CA's certificate.
-	if(!LoadCertificate(ca_cert_data_len, ca_cert_data, &ca_certbio, &ca_cert))
+	if(!LoadCertificate(vault.certificate_authority.cert_data_len, vault.certificate_authority.cert_data, &(vault.certificate_authority.cert_bio), &(vault.certificate_authority.cert)))
 	{
 		DeInitSecurity();
 		return false;
 	}
 
 	// Initialize the global certificate validation store object.
-	if (!(ca_store = X509_STORE_new()))
+	if (!(vault.certificate_authority.cert_store = X509_STORE_new()))
 	{
 		BIO_printf(outbio, "Security: Error creating X509_STORE_CTX object\n");
 		DeInitSecurity();
@@ -1595,98 +1855,12 @@ bool InitSecurity(unsigned char* ca_cert_filename, unsigned char* node_cert_file
 	}
 
 	// Add our root CA to the store.
-	if (X509_STORE_add_cert(ca_store, ca_cert) != 1)
+	if (X509_STORE_add_cert(vault.certificate_authority.cert_store, vault.certificate_authority.cert) != 1)
 	{
 		BIO_printf(outbio, "Security: Error loading CA cert or chain file\n");
 		DeInitSecurity();
 		return false;
 	}
-
-	// lprintf("Security: Verifying our node certificate...\n");
-	if(!VerifyCertificate(node_cert_data_len, node_cert_data, NULL, 0))
-	{
-		BIO_printf(outbio, "Security: Error verifying certificate\n");
-		DeInitSecurity();
-		return false;
-	}
-
-	// Load up our private key.
-	// lprintf("Security: Loading DH private key...\n");
-	node_privatekeybio = BIO_new_mem_buf((void*)node_dh_privatekey_data, -1);
-	if(!(node_privatekey = PEM_read_bio_PrivateKey(node_privatekeybio, NULL, NULL, NULL)))
-	{
-		BIO_printf(outbio, "Security: Error loading node private key\n");
-		DeInitSecurity();
-		return false;
-	}
-
-	// Do some checks on the private key
-	if(!CheckKey(node_privatekey))
-	{
-		DeInitSecurity();
-		return false;
-	}
-	else
-	{
-//		if(!PEM_write_bio_PrivateKey(outbio, node_privatekey, NULL, NULL, 0, 0, NULL))
-//			BIO_printf(outbio, "Error writing private key data in PEM format");
-		node_privatekey_dh = EVP_PKEY_get1_DH(node_privatekey);
-	}
-
-	// Load our public key from the certificate
-	if(!(node_publickey = GetNodeShare(node_cert_data_len, node_cert_data)))
-	{
-		DeInitSecurity();
-		return false;
-	}
-
-	// lprintf("Security: Comparing the node private key with the node certificate...\n");
-	const BIGNUM* pubkey;
-	DH_get0_key(node_privatekey_dh, &pubkey, NULL);
-	if(BN_cmp(pubkey, node_publickey) != 0)
-	{
-		BIO_printf(outbio, "Security: The nodes private key doesn't match the node certificate provided.\n");
-		DeInitSecurity();
-		return false;
-	}
-	else
-	{
-		// lprintf("Security: ...key match.\n");
-	}
-
-	// In userspace, we don't know if the kernel has a broadcast key.
-	uint32_t bk_len;
-	unsigned char* bk;
-	// lprintf("Security: \tGenerating a new broadcast key (just in case the kernel doesn't have one yet)...\n");
-	if(MallocAndGenerateNewKey(&bk_len, &bk))
-	{
-		uint32_t ske_len;
-		unsigned char* ske;
-		uint32_t skp_len;
-		unsigned char* skp;
-
-		// lprintf("Security: \tGenerating SKE and SKP for the new broadcast key (again, just in case)...\n");
-		if(MallocAndGenerateSharedkeys(bk_len, bk, &ske_len, &ske, &skp_len, &skp))
-		{
-			// lprintf("Security: \tUpdating the new broadcast key (again, just in case)...\n");
-			UpdateSupermanBroadcastKey(bk_len, bk, ske_len, ske, skp_len, skp, false);
-			free(ske);
-			ske = NULL;
-			free(skp);
-			skp = NULL;
-		}
-		else
-			lprintf("Security: \tFailed to generate SKE and SKP from the new broadcast key.\n");
-		free(bk);
-		bk = NULL;
-	}
-
-	//lprintf("Security: Testing shared secret generator...\n");
-	//unsigned char* secret = GenerateSharedSecret(node_cert_data_len, node_cert_data);
-	//OPENSSL_free(secret);
-
-	//lprintf("Security: Extracting DH public key...\n");
-	//ExtractPublicKey(node_cert_data);
 
 	return true;
 }
@@ -1694,50 +1868,13 @@ bool InitSecurity(unsigned char* ca_cert_filename, unsigned char* node_cert_file
 void DeInitSecurity(void)
 {
 	// lprintf("Security: Unloading...\n");
-
-	if(ca_store)
-	{
-		X509_STORE_free(ca_store);
-		ca_store = NULL;
-	}
-
-	FreeCertificate(&ca_certbio, &ca_cert);
-
 	if(outbio)
 	{
 		BIO_free_all(outbio);
 		outbio = NULL;
 	}
-	if(ca_cert_data)
-	{
-		free(ca_cert_data);
-		ca_cert_data = NULL;
-	}
-	if(node_cert_data)
-	{
-		free(node_cert_data);
-		node_cert_data = NULL;
-	}
-	if(node_dh_privatekey_data)
-	{
-		free(node_dh_privatekey_data);
-		node_dh_privatekey_data = NULL;
-	}
-	if(node_privatekeybio)
-	{
-		BIO_free_all(node_privatekeybio);
-		node_privatekeybio = NULL;
-	}
-	if(node_privatekey)
-	{
-		EVP_PKEY_free(node_privatekey);
-		node_privatekey = NULL;
-	}
-	if(node_publickey)
-	{
-		BN_free(node_publickey);
-		node_publickey = NULL;
-	}
+
+	vault_free(&vault);
 }
 
 #endif

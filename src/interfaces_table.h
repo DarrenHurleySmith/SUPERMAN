@@ -35,8 +35,8 @@ uint32_t GetInterfacesCount(void);
 				{												\
 					struct list_head *pos;									\
 					list_for_each(pos, interfaces_table) {							\
-						interfaces[i++] = ((struct interfaces_table_entry *)pos)->ifindex;		\
-						nets[i++] = ((struct interfaces_table_entry *)pos)->net;				\
+						if(((struct interfaces_table_entry *)pos)->net == NET_VAR)			\
+							interfaces[i++] = ((struct interfaces_table_entry *)pos)->ifindex;	\
 					}											\
 				}												\
 				else												\
@@ -47,14 +47,13 @@ uint32_t GetInterfacesCount(void);
 		for(i = 0; i < interfaces_count; i++)										\
 		{														\
 			uint32_t ifindex = interfaces[i];									\
-			NET_VAR = nets[i];															\
 			DEV_VAR = dev_get_by_index(NET_VAR, ifindex);								\
 			if(DEV_VAR == NULL)											\
 			{													\
 				printk(KERN_INFO "SUPERMAN: Interfaces Iterator - \t\tNo device for interface %i.\n", ifindex);	\
 				continue;											\
 			}													\
-			else												\
+			else													\
 			{
 
 #define INTERFACE_ITERATOR_END													\
