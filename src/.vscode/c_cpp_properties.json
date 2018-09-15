@@ -1,0 +1,33 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                ".",
+                "${workspaceFolder}/**",
+                "/usr/include",
+                "/usr/local/include",
+                "/lib/modules/4.15.0-33-generic/build/arch/x86/include",
+                "/lib/modules/4.15.0-33-generic/build/include",
+                "/lib/modules/4.15.0-33-generic/build/arch/x86/include/generated"
+            ],
+            "defines": ["__KERNEL__"],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "clang-x64",
+            "browse": {
+                "path": [
+                    "/usr/include",
+                    "/usr/local/include",
+                    "/lib/modules/4.15.0-33-generic/build/arch/x86/include",
+                    "/lib/modules/4.15.0-33-generic/build/include",
+                    "/lib/modules/4.15.0-33-generic/build/arch/x86/include/generated"
+                    ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            }
+        }
+    ],
+    "version": 4
+}
