@@ -127,16 +127,19 @@ void usage(int status, char* progname)
 	 "-p, --dh_privkey [file]    Location of the DH private key file\n"
 	 "-V, --version              Show version\n"
 	 "-?, --help                 Show help\n\n"
-	 ""
-	 "Examples:"
-	 ""
-	 "# Start up the SUPERMAN daemon."
-	 "%s -m daemon -c [file]"
-	 ""
-	 "# Secure the given interface using using the node certificate and dh private key."
-	 "%s -m if -i [if] -s up -c [file] -p [file]"
-	 ""
-	 "Dr Jodie Wetherall, <wj88@gre.ac.uk>\n\n", progname, progname, progname);
+	 "\n"
+	 "Examples:\n"
+	 "\n"
+	 "# Start up the SUPERMAN daemon.\n"
+	 "%s -m daemon -c [file]\n"
+	 "\n"
+	 "# Secure the interface using the node certificate and dh private key.\n"
+	 "%s -m if -i [if] -s up -c [file] -p [file]\n"
+	 "\n"
+	 "# Unsecure the interface.\n"
+	 "%s -m if -i [down]\n"
+	 "\n"
+	 "Dr Jodie Wetherall, <wj88@gre.ac.uk>\n\n", progname, progname, progname, progname);
 
     exit(status);
 }
