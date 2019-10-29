@@ -1,5 +1,6 @@
 # SUPERMAN - Security Using Pre-Existing Routing for Mobile Ad hoc Networks #
 
+This is a fork of Dr Wetherall's Bitbucket Repository. Dr Hurley-Smith is developing further capabilities, including further lightweight OS compatibility, security features and extended application-security features. 
 
 ## What is this reposoritory for? ##
 
@@ -79,7 +80,7 @@ Clone the repository and change into the repos directory:
 
 ````
 
-git clone https://bitbucket.org/wj88/superman.git
+git clone https://github.org/DarrenHurleySmith/superman.git
 cd superman
 ````
 
@@ -286,3 +287,7 @@ Bibtex
 Dr Jodie Wetherall <wj88@gre.ac.uk>
 
 Faculty of Engineering Science, University of Greenwich
+
+Dr Darren Hurley-Smith <darren.hurley-smith@rhul.ac.uk>
+
+Department of Information Security, Royal Holloway University of London
