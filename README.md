@@ -80,7 +80,7 @@ Clone the repository and change into the repos directory:
 
 ````
 
-git clone https://github.org/DarrenHurleySmith/superman.git
+git clone https://github.com/DarrenHurleySmith/superman.git
 cd superman
 ````
 
